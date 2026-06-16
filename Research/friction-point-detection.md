@@ -196,23 +196,7 @@ Once we build a detector, how do we know it is working?
 
 ---
 
-## 7. Gaps in the Literature
-
-After reviewing the existing work, here are the areas where the literature does not have good answers yet — and where this project can contribute something new:
-
-**1. Coding agent traces.** Most papers test on web navigation tasks (WebShop, WebArena) or household tasks (ALFWorld). TRAIL is the closest to our setting, but it is still not Claude Code traces. We need to check whether the existing taxonomies and methods transfer.
-
-**2. Cost per friction event.** Papers detect that something went wrong, but almost none of them say how much it cost. Our project's cost dimensions (money, human attention, runtime) are novel and practically useful.
-
-**3. Real-time detection.** Almost all existing work is post-hoc — you analyze the trace after the session ends. Trajectory Guard is the only exception. The project's real-time hints vision is ahead of the literature.
-
-**4. Human feedback as a signal.** The feedback-based detection approach (using the user's replies as weak labels) is almost completely unexplored. This is a real opportunity.
-
-**5. Local deployment.** Every major observability tool — LangSmith, Phoenix, Arize, AgentOps — is cloud-hosted. A small, local application that runs on your own machine and reads your own traces does not exist yet.
-
----
-
-## 8. Proposed Detection Pipeline
+## 7. Proposed Detection Pipeline
 
 Based on everything above, here is a reasonable starting architecture for the MVP phase:
 
