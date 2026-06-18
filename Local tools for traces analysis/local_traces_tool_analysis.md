@@ -4,14 +4,16 @@ Analysis of local-first tools for inspecting AI coding-agent runs, focused on Cl
 Code (sessions stored as JSONL in `~/.claude/projects/<key>/<id>.jsonl`).
 
 **Verification legend** — claims here are marked by how we confirmed them:
-- ✅ **Verified** hands-on in this environment (lm-assist v0.1.70)
+- ✅ **Verified** hands-on (lm-assist v0.1.70; `@vexor/claude-trace` v0.4.0; `luoyuctl/agenttrace` v0.5.4)
 - ⚠️ **Partly true** — real, but with an important caveat
 - ❌ **Not true** for the installed version
 - ❓ **Unverified** — per the tool's own docs/marketing; not tested, or required
   components were not installed
 
-> Only **lm-assist** was tested hands-on. **claude-trace** and **AgentTrace** sections
-> are from their docs (❓) and should be verified before relying on them.
+> **lm-assist**, **claude-trace (vexorkai)**, and **AgentTrace (luoyuctl)** were all tested
+> hands-on (see their deep-dive sections). The Category-B SDK tools (Langfuse, Phoenix,
+> AgentTrace by Rxflex/tensorstax) remain ❓ — they don't read Claude Code JSONL, so they
+> are out of scope for this evaluation.
 
 ---
 
@@ -20,7 +22,7 @@ Code (sessions stored as JSONL in `~/.claude/projects/<key>/<id>.jsonl`).
 - **JSONL readers** — parse Claude Code files post-hoc, no code changes
   (lm-assist, claude-trace, claude-code-trace, AgentTrace, ccusage, …)
 - **SDK instrumentation** — add a tracing library to *your own* agent code; do **not**
-  read Claude Code JSONL (AgentTrace-by-Rxflex, Langfuse, Arize Phoenix)
+  read Claude Code JSONL (Langfuse, Arize Phoenix)
 - **Custom parser** — read the JSONL directly and compute derived signals (`lm_assist.py`)
 
 ---
@@ -150,8 +152,8 @@ GRAND TOTAL est. $81.53
 
 | Tool | Loop detection | Per-turn | Token (in/out/cache) | Cost | Friction | Full trace | Local / License |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|---|
-| **claude-trace** ⭐ | ✅ same tool 3+ consecutive | ✅ | ✅ | ~ | ✅ `--reflect` | ✅ | Local · MIT |
-| **AgentTrace** (luoyuctl) ⭐ | ✅ retry loops + latency gaps | ✅ | ✅ + cache | ✅ est. | ✅ incident timeline | ✅ | Local · TUI |
+| **claude-trace** (tested) ⭐ | ✅ same tool 3+ consecutive (no identical-cmd) | ⚠️ `--reflect` only | ⚠️ `--reflect` only | ❌ broken (incl. `--reflect`✅) | ⚠️ tool-error count only | ✅ | Local · MIT |
+| **AgentTrace** (luoyuctl, tested) ⭐ | ✅ repeated-result loops + latency gaps | ✅ | ✅ + cache | ⚠️ est. (no opus-4-8 in catalog) | ✅ incident timeline (no user-correction) | ✅ | Local · TUI/CLI · Go MIT |
 | **lm-assist** (tested) | ❌ (visual only) | ✅ in/out only | ✅ session-level | ✅ | ❌ | ✅ richest | Local |
 | token-dashboard | ~ partial (repetition tips) | ✅ | ✅ | ✅ | ~ | ✅ | Local |
 | claude-token-analyzer | ❌ | ✅ | ✅ | ✅ per-model | ~ | ~ | Local |
@@ -166,44 +168,118 @@ GRAND TOTAL est. $81.53
 
 ---
 
-## Deep dive: claude-trace (vexorkai) ⭐  — ❓ per docs
+## Deep dive: claude-trace (vexorkai) ⭐  — ✅/⚠️/❌ tested hands-on
 
-The only mainstream JSONL reader with **both loop and friction detection** built in.
+Tested `@vexor/claude-trace` v0.4.0 (`npm i -g @vexor/claude-trace`; bin `claude-trace`;
+zero-dependency, MIT, 8★, last pushed 2026-03-03). It is primarily a **token/cost
+analytics CLI** (`--tools`, `--sessions`, `--projects`, `--timeline`, `--session <id>`)
+with **loop detection + a `--reflect` efficiency mode** layered on. Also ships a `/reflect`
+Claude Code plugin/skill. Convenience wins: accepts a **short session-id prefix** and
+**scans subagent/workflow transcripts** (111 files in our setup).
 
-- **Loop detection** — flags when the **same tool is called 3+ times consecutively**,
-  the classic stuck-agent signature.
-- **Friction detection** — a `--reflect` mode that surfaces where the run struggled.
-- **Per-turn inspection, token breakdown, full trace** — standard reader capabilities.
-- **Local, MIT.** Lightweight.
-- **Why it matters here:** it ships the two rare capabilities lm-assist lacks. Best
-  paired with lm-assist (dashboard) rather than replacing it.
+All findings below are from the head-to-head on session `a7526c9f` (the same session used
+for the lm-assist + `lm_assist.py` baseline above).
 
-## Deep dive: AgentTrace (luoyuctl) ⭐  — ❓ per docs
+- **Loop detection — ✅ real and accurate.** `--reflect` flags "same tool 3+ consecutive"
+  and **agrees with `lm_assist.py loops` on every major run** — both find the 19x, 9x, 6x,
+  4x Bash runs, Edit 4x, Agent 3x (claude-trace found 12 of the parser's 13; one off-by-one
+  from turn-merging). **Caveats:** (a) consecutive-same-tool **only** — it does **not**
+  detect *identical-command repetition*, the parser's stronger stuck signal; (b) it flags
+  every 3+ run indiscriminately (14 "loops," many benign exploration runs); (c) the
+  per-loop **"estimated wasted $" is a fabricated constant** (every 3x run = $2.3792 =
+  invocation-share × session-cost), not measured waste.
+- **`--reflect` efficiency mode — ✅ exists and its cost reconciles.** Gives a sensible
+  tool breakdown (Bash 68 / Edit 22 / Agent 3 … ≈ parser's main-thread counts), the loop
+  list, and CLAUDE.md suggestions. Its session cost **$82.48 ≈ parser's $81.53 (~1%)** —
+  the **only trustworthy cost number** the tool produces.
+- **Friction — ⚠️ much weaker than implied.** "Friction" is just `Tool errors: 1/104` plus
+  a raw stdout dump of the failing command. It has **no user-correction detection** — it
+  misses all 4 user corrections ("this does not work," etc.) that `lm_assist.py friction`
+  surfaces, which are the most valuable friction signal.
+- **Cost engine outside `--reflect` — ❌ broken and self-contradictory.**
+  - `--tools` dollar amounts sum to **~$4,426** while stated total cost is **$184** (~24×
+    inflated; the % column is internally consistent, the dollars are not).
+  - Same session reads **$175.78** in `--sessions`/overall but **$82.48** in `--reflect` —
+    a ~2× self-disagreement.
+  - `--session` drill-down attributes **$116 to a 3,238-token Bash result** (≈$36,000/M,
+    impossible) and sees only **3 Bash + 1 Read** where `--reflect` correctly sees 68 Bash
+    — two parsing code paths, one badly broken.
+- **Net:** Use it for **loop detection** and the **`--reflect`** summary (cost + loops +
+  CLAUDE.md tips) — those work and reconcile with the parser. **Do not trust** its
+  `--tools` / `--sessions` / `--session` / overall **cost attribution**, and don't rely on
+  it for friction. The parser still wins on identical-command loops and user-correction
+  friction; lm-assist still wins on session-level cost accuracy and the DAG/live views.
 
-A **local-first terminal UI (TUI) + diagnostic engine** for post-run auditing. The
-strongest single tool on paper for loops + friction + health scoring.
+## Deep dive: AgentTrace (luoyuctl) ⭐  — ✅/⚠️/❌ tested hands-on
 
-- **Multi-format parsing** — one tool for Claude Code, Codex CLI, Gemini CLI, Aider,
-  Cursor exports, Cline, Hermes Agent, and generic JSONL. Unified translation layer.
-- **Loop & latency auditing** — detects **repetitive retry loops** (grouped by tool,
-  with normalized error messages) and **"hanging gaps"** (unusual delays between tool
-  calls) to isolate where an agent stalled.
-- **Token / context / cost** — accumulated token burn, **context-pressure alerts**
-  (transcript growing too large), prompt-cache auditing, estimated API cost.
-- **Baseline regression** — compare a run against a known-good baseline; flags when a
-  workflow got slower, costlier, or touched a broader file/tool surface, and the exact
-  point divergence began.
-- **Tool authority / safety classification** — buckets executions into read-only vs.
-  high-risk (shell writes, git writes, network), proving if a session crossed a boundary.
-- **Friction timeline** — failures/exceptions/slow commands organized into a searchable
-  incident timeline; details files/tools touched since last git checkpoint (blast radius).
-- **Per-session health scores** — composite of tokens, loops, latency, tool errors;
-  usable as a **CI/CD quality gate** (fail the build if score drops / failure rate spikes).
-- **Offline reports** — exports to terminal text, Markdown, JSON, or self-contained
-  interactive HTML (zero network).
-- **Note:** distinct from *AgentTrace by Rxflex* (an SDK instrumentation tool — Category
-  B) and *AgentTrace by tensorstax* (a trace+eval library). Three different "AgentTrace"
-  projects; this luoyuctl one is the JSONL auditor.
+Tested **`luoyuctl/agenttrace` v0.5.4** (Go, MIT, 71★; `github.com/luoyuctl/agenttrace`,
+*not* a fork). Installed by downloading the prebuilt `agenttrace-darwin-arm64` binary from
+the v0.5.4 release and **verifying its published sha256** (matched). It is a **local-first
+TUI + report/diagnostic engine** that auto-discovers many agent log dirs. Of the three
+tools tested, this is **by far the richest analysis engine** — and most headline claims
+held up. Verified on the same project dir as the lm-assist/parser baseline (session
+`a7526c9f` + its workflow subagents).
+
+> *Identity note:* this is the **luoyuctl** JSONL auditor — distinct from *AgentTrace by
+> Rxflex* (SDK step-debugger, Category B) and *AgentTrace by tensorstax* (trace+eval lib).
+> Caveat on the author: the `luoyuctl` GitHub account is mostly **mass-forked "awesome-*"
+> lists** (271 repos), but `agenttrace` itself is an original, non-fork Go project with
+> real releases, CI, homebrew tap, and tests.
+
+**Headless usage** (TUI not needed): `--doctor`, `--overview -f json|markdown|html`,
+`--search <q>`, `--latest`, `--waste`, `--compare`, `--baseline`, CI-gate flags, `-d <dir>`
+to scope, `--list-models`. The TUI (`agenttrace`) is the default interactive view.
+
+- **Multi-format parsing — ✅.** `--doctor` auto-discovered Claude Code (✅), Codex CLI
+  (✅), Gemini CLI tmp (✅) plus slots for Qwen/Cline/OpenCode/Aider/etc. Genuinely
+  multi-agent, unlike the Claude-only tools.
+- **Loop & latency auditing — ✅, and smarter than claude-trace.** Its **failure-loop**
+  signal is *"tool X repeated the same **result** N times"* — a genuine stuck signal, not
+  claude-trace's naive "3+ consecutive same tool." Verified: it flagged a real workflow
+  subagent (`agent-ac08d2b4…`, 69 `StructuredOutput` calls) as *"StructuredOutput repeated
+  the same result 8×"* (HIGH, health 58 — the worst session), and `Edit repeated the same
+  result 4×` in `63f0bb29`. **Notably it did NOT false-flag `a7526c9f`'s 19× Bash run**
+  (those were distinct exploration commands) — where claude-trace flagged all 14 runs
+  indiscriminately. **Latency/"hanging gaps" ✅** (`109.5s`, `56811.9s` idle gaps).
+- **Token / context / cost — ✅ with a pricing caveat.** "Burn divergence" gives both
+  **loop-cost-within-total** (`$1.5375 loop cost inside $28.2448 total`) and **context
+  pressure** (`tokens per assistant turn`). Per-session cost ✅ matches the parser:
+  `a7526c9f` main = **$36.22** vs parser main-thread **$35.68**. ⚠️ **Pricing caveat:**
+  its model catalog (`--list-models`) has `claude-opus-4` ($15/$75) and `claude-opus-4.5`
+  ($5/$25) but **no `claude-opus-4-8`** — so the current model is **fuzzy-matched to older
+  Opus pricing**. Run `--update-pricing` (pulls LiteLLM rates) before trusting dollars.
+- **Baseline regression — ✅.** `--baseline <json>` + `--baseline-max-*-delta-pct`
+  thresholds emit a `baseline_comparison` block.
+- **Tool authority / safety classification — ✅ but incomplete.** Buckets calls into
+  `git_write / network_access / package_install / read_only_files / shell_exec /
+  test_or_build / write_files`. ⚠️ But **154 of 662 calls (~23%) land in
+  `unknown_authority`** — its classifier doesn't recognize newer Claude Code tools
+  (Agent, StructuredOutput, WebFetch, Workflow, Skill…), and `unknown` was the "highest"
+  authority reported. Treat the safety read as partial.
+- **Friction / incident timeline — ✅ (tool/timing only).** Per-session timeline of
+  milestones, idle gaps, failure loops, burn divergence, touched-surface (blast radius:
+  files + tool counts), with severities. ❌ **No user-correction detection** — like
+  claude-trace, it reads tool/result/timing signals, not the human's reply sentiment;
+  the parser's user-correction friction remains unique.
+- **Per-session health + CI gates — ✅ verified working.** Health scores per session
+  (`a7526c9f`=70, the looping subagent=58). CI gates **functionally tested**: a lenient
+  gate (`--fail-under-health 80 --max-tool-fail-rate 15`) exited **0**; a strict gate
+  (`--fail-under-health 99 --max-tool-fail-rate 5`) exited **2**. Plus a health-trend
+  (direction up/down, `regressing` bool).
+- **Anomaly typing — ✅** (`hanging`, `latency`, `tool_failures`). ⚠️ **Latency/"hanging"
+  false-positives on human-paced sessions:** a `56811.9s` (~15.8h) "idle gap" and
+  "hanging: now" flags are just sessions left open while the human stepped away, not real
+  stalls — for interactive Claude Code use these need human judgement.
+- **Offline reports — ✅.** Verified `text`, `json`, `markdown`; `html` flag present.
+  Zero network, fully local.
+- **Net:** the **strongest analysis engine of the three** — real failure-loop detection
+  (better-targeted than claude-trace), latency gaps, burn/context-pressure, health scores,
+  tool-authority, baseline regression, working CI gates, and multi-agent + multi-format.
+  Watch three things: **pricing** (no opus-4-8 in catalog → `--update-pricing`),
+  **tool-authority gaps** (~23% unknown), and **latency false-positives** on interactive
+  sessions. Still no **user-correction friction** (parser-only). Best role here: the
+  **diagnostic/CI layer**, complementing lm-assist (browse/DAG/live) and the parser
+  (per-turn cache split + user-correction friction).
 
 ---
 
@@ -259,15 +335,33 @@ derivable from it:
 
 ## Next steps
 
-We have validated lm-assist + the parser. To complete the evaluation, **try the two
-analysis-focused tools next** (both ❓ untested so far):
+All three JSONL-reader tools are now validated hands-on (see deep dives):
 
-- **claude-trace (vexorkai)** — install and run on these sessions to verify its built-in
-  **loop detection** (same tool 3+ consecutive) and **`--reflect` friction** output, then
-  compare against `lm_assist.py loops` / `friction`.
-- **AgentTrace (luoyuctl)** — evaluate its **health scores, baseline regression, latency
-  gaps, tool-authority classification, and CI/CD gates** — the richest friction/loop
-  feature set on paper. Confirm it parses Claude Code JSONL as advertised.
+- ✅ **claude-trace (vexorkai)** — *done.* Loop detection ✅ accurate, `--reflect` cost ✅
+  matches the parser ($82 vs $81); cost attribution outside `--reflect` is ❌ broken and
+  "friction" ⚠️ misses user corrections.
+- ✅ **AgentTrace (luoyuctl)** — *done.* Richest analysis engine: repeated-result failure
+  loops ✅ (better-targeted than claude-trace), latency gaps ✅, burn/context-pressure ✅,
+  health scores + working CI gates ✅, baseline regression ✅, tool-authority ⚠️ (~23%
+  unknown), multi-format ✅. Caveats: pricing catalog lacks `claude-opus-4-8`
+  (`--update-pricing`), latency false-positives on human-paced sessions, no
+  user-correction friction.
 
-Goal: upgrade their ❓ marks to ✅/❌ with hands-on evidence, the same way we did for
-lm-assist.
+## AgentTrace → LLM-as-judge (DeepEval / Inspect-AI) workflow
+
+Use `AgentTrace` (luoyuctl) to surface candidate regions (repeated-result loops, idle gaps, high-cost turns), then feed those regions to a local LLM-as-judge to answer "why."
+
+### Build-your-own frameworks for LLM-as-judge root-cause analysis
+
+All run **offline only if pointed at a local judge** (Ollama/vLLM); defaults call cloud APIs. All need a small custom loader to feed JSONL turns in.
+
+| Framework | License | Why it fits | Local judge | Caveat |
+|---|---|---|---|---|
+| **DeepEval G-Eval** | — | Plain-language criteria → outputs **score + reason + explanation**. Fastest path to a root-cause classifier. | ✅ `deepeval set-ollama` | Non-deterministic (use DAGMetric for determinism) |
+| **Inspect AI** (UK AISI) | MIT | Most rigorous; custom scorers with Score.explanation, model-graded scorers. Reusable classifier. | ✅ local provider | Targets its own eval logs; needs JSONL→EvalLog converter |
+| **promptfoo llm-rubric** | MIT | YAML-config judge → {reason, score, pass}. Pick this if you prefer config over Python. | ✅ vLLM/Ollama provider | Default grader is GPT-4o; "Tracing" is live OTLP only |
+
+### Next steps
+
+**The winning architecture:** Use `AgentTrace` as the **signal harvester** (per-turn cache/cost, identical-command loops, user-correction friction, tool failures), then feed suspicious regions to a **local G-Eval or Inspect-AI rubric** that surfaces the actual error text and explains the root cause. That's the combination that exceeds AgentTrace alone.
+
