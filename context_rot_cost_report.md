@@ -5,7 +5,7 @@ that cost — per session, and per turn?
 
 **Data:** `SALT-NLP/SWE-chat`, all **5,851 sessions** / **364,173 API calls**.
 Dollar figures are **token-based estimates** at a token-weighted blended rate of
-**$4.75 in / $23.75 out per MTok** (the data is ~all Claude Opus 4.x).
+**\$4.75 in / \$23.75 out per MTok** (the data is ~all Claude Opus 4.x).
 Models here have a **1M-token context window**.
 
 > **What "cache read" means.** The model is stateless, so every turn re-sends the
@@ -21,14 +21,14 @@ Models here have a **1M-token context window**.
 
 | Metric | Value |
 |---|---|
-| Avg cost / session | **$8.31** |
-| Median cost / session | $1.45 |
-| p90 / max cost / session | $11.61 / **$2,501** |
-| Avg cost / API call (turn) | **$0.13** |
-| Total estimated spend | ~$48,600 |
-| **Context tax (cache-read $ ÷ total $)** | **46.5%** |
+| Avg cost / session | **\$8.31** |
+| Median cost / session | \$1.45 |
+| p90 / max cost / session | \$11.61 / **\$2,501** |
+| Avg cost / API call (turn) | **\$0.13** |
+| Total estimated spend | ~\$48,600 |
+| **Context tax (cache-read \$ ÷ total \$)** | **46.5%** |
 
-The mean ($8.31) sits ~6× above the median ($1.45): a small number of long,
+The mean (\$8.31) sits ~6× above the median (\$1.45): a small number of long,
 context-heavy sessions dominates total spend.
 
 ![Context rot in dollars](context_rot_curve.png)
@@ -61,33 +61,33 @@ This table is **turn-level, pooled across all 5,403 sessions** — every billed 
 **total count of such turns across all sessions** (out of 38,549 billed turns),
 **not** a per-session average and **not** restricted to heavy sessions.
 
-| Heavy line T | Heavy turns (all sessions) | Sessions w/ ≥1 heavy turn | Avg heavy turns per heavy session | Avg $ / heavy turn | Cache-read share | vs light turn |
+| Heavy line T | Heavy turns (all sessions) | Sessions w/ ≥1 heavy turn | Avg heavy turns per heavy session | Avg \$ / heavy turn | Cache-read share | vs light turn |
 |---|---|---|---|---|---|---|
-| **100k** (10% of window) | 18,222 (47.3% of turns) | **2,075 (38.4%)** | 8.8 | $0.132 | 74% | **2.7×** |
-| **250k** (25%) | 4,247 (11.0%) | 158 (2.9%) | 26.9 | $0.257 | 83% | **3.8×** |
-| **500k** (50%) | 1,170 (3.0%) | 31 (0.6%) | 37.7 | **$0.373** | **86%** | **4.7×** |
+| **100k** (10% of window) | 18,222 (47.3% of turns) | **2,075 (38.4%)** | 8.8 | \$0.132 | 74% | **2.7×** |
+| **250k** (25%) | 4,247 (11.0%) | 158 (2.9%) | 26.9 | \$0.257 | 83% | **3.8×** |
+| **500k** (50%) | 1,170 (3.0%) | 31 (0.6%) | 37.7 | **\$0.373** | **86%** | **4.7×** |
 
 The heavier the turn, the more it costs **and** the larger the share that is pure
-context-carrying. At 500k a turn averages **$0.37**, of which **~$0.32 (86%) is
+context-carrying. At 500k a turn averages **\$0.37**, of which **~\$0.32 (86%) is
 cache-read waste** — about **4.7× a light turn**.
 
 Note the **concentration**: 250k+ turns occur in only ~158 sessions and 500k+
 turns in just **31 sessions** (~38 heavy turns each). The very-heavy tail is a
-handful of monster sessions (the ones behind the $2,501 max) — so the 250k/500k
+handful of monster sessions (the ones behind the \$2,501 max) — so the 250k/500k
 rows are indicative; the bulk of heavy turns live in the **100k–250k** band.
 
 ### Rot curve — cost per turn vs context size (left panel of chart)
 
-| Context size of the turn | Avg $/turn |
+| Context size of the turn | Avg \$/turn |
 |---|---|
-| 0–25k | $0.02 |
-| 25–50k | $0.04 |
-| 50–100k | $0.06 |
-| 100–150k | $0.08 |
-| 150–200k | $0.11 |
-| 200–300k | $0.15 |
-| 300–500k | $0.23 |
-| **>500k** | **$0.37** |
+| 0–25k | \$0.02 |
+| 25–50k | \$0.04 |
+| 50–100k | \$0.06 |
+| 100–150k | \$0.08 |
+| 150–200k | \$0.11 |
+| 200–300k | \$0.15 |
+| 300–500k | \$0.23 |
+| **>500k** | **\$0.37** |
 
 Cost climbs ~15× from the lightest to heaviest band, and the red **cache-read
 (context tax)** portion grows from a sliver to the overwhelming majority.
@@ -98,7 +98,7 @@ Cost climbs ~15× from the lightest to heaviest band, and the red **cache-read
 - **Share** of a heavy session's cost incurred **after** it goes heavy (the robust
   finding — a ratio, unaffected by the sampling caveat below):
   - **per-session average: ~75%** (median **85%**) — the typical heavy session.
-  - **pooled across all heavy sessions: ~87%** — total post-heavy $ ÷ total $;
+  - **pooled across all heavy sessions: ~87%** — total post-heavy \$ ÷ total \$;
     runs higher because it's dominated by the few giant sessions.
 - ~**71%** of a heavy session's turns are post-heavy, and those post-heavy turns are
   **pricier each** (~2× a pre-heavy turn) — so cost concentrates after the crossing.
@@ -109,9 +109,9 @@ Cost climbs ~15× from the lightest to heaviest band, and the red **cache-read
 
 > ⚠️ **Sampling caveat.** The `conversations` table records tokens on only ~11% of
 > real API calls (38,549 billed turns vs 364,173 `api_call_count` in `sessions`).
-> So absolute *turn counts* and *per-session $ split* derived from it (e.g. "3.4
-> turns / $0.19 before vs 10.2 turns / $1.24 after") are **undercounts** and do not
-> reconcile with the authoritative **$8.31/session**. Use them only as **ratios**;
+> So absolute *turn counts* and *per-session \$ split* derived from it (e.g. "3.4
+> turns / \$0.19 before vs 10.2 turns / \$1.24 after") are **undercounts** and do not
+> reconcile with the authoritative **\$8.31/session**. Use them only as **ratios**;
 > for absolute per-session totals, trust the `sessions` table.
 
 ---
@@ -139,10 +139,10 @@ median **95k**, p90 **268k**, p99 **675k**, max **1.06M** (a single outlier turn
 ## Direct answer
 
 Once a turn's context goes heavy (>100k tokens, ~10% of the 1M window), it costs
-about **$0.13**, of which roughly **$0.10 (about 74%) is spent purely re-reading
-the accumulated context** — versus ~$0.05/turn (55% context) for a light turn. So
-going heavy adds **~$0.08 per turn**, and the "context tax" per heavy turn is
-**~$0.10**. It scales further with size: a >500k-token turn averages **$0.37/turn**
+about **\$0.13**, of which roughly **\$0.10 (about 74%) is spent purely re-reading
+the accumulated context** — versus ~\$0.05/turn (55% context) for a light turn. So
+going heavy adds **~\$0.08 per turn**, and the "context tax" per heavy turn is
+**~\$0.10**. It scales further with size: a >500k-token turn averages **\$0.37/turn**
 (~86% context tax, ~4.7× a light turn). Because ~87% of a heavy session's spend
 lands after it goes heavy, the long-context tail is where context rot becomes real
 dollars.
