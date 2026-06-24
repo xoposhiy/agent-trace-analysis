@@ -138,11 +138,11 @@ median **95k**, p90 **268k**, p99 **675k**, max **1.06M** (a single outlier turn
 
 ## Direct answer
 
-Once a turn's context goes heavy (>100k tokens, ~10% of the 1M window), it costs
+Once a turn's context goes heavy (>100k tokens, approx. 10% of the 1M window), it costs
 about **\$0.13**, of which roughly **\$0.10 (about 74%) is spent purely re-reading
 the accumulated context** — versus ~\$0.05/turn (55% context) for a light turn. So
 going heavy adds **~\$0.08 per turn**, and the "context tax" per heavy turn is
-**~\$0.10**. It scales further with size: a >500k-token turn averages **\$0.37/turn**
+**approx.\$0.10**. It scales further with size: a >500k-token turn averages **\$0.37/turn**
 (~86% context tax, ~4.7× a light turn). Because ~87% of a heavy session's spend
 lands after it goes heavy, the long-context tail is where context rot becomes real
 dollars.
