@@ -149,14 +149,98 @@ dollars.
 
 ---
 
+## Claude Code only (re-run)
+
+The numbers above pool **all agents** in SWE-chat. The corpus is actually
+multi-agent — **82.9% Claude Code** (4,853 sessions), the rest OpenCode (10.6%),
+Codex (3.6%), Gemini CLI, Cursor, etc. Re-running the **exact same analysis**
+filtered to `agent == "Claude Code"` changes the picture materially:
+
+| Metric | All agents (5,851) | **Claude Code only (4,853)** |
+|---|---|---|
+| Sessions | 5,851 | 4,853 (82.9%) |
+| Total estimated spend | \$48,644 | **\$29,187** (60% of spend) |
+| Avg \$ / session | \$8.31 | **\$6.01** |
+| Median \$ / session | \$1.45 | \$1.61 |
+| p90 \$ / session | \$11.61 | \$11.11 |
+| Max \$ / session | **\$2,501** | **\$946** |
+| **Context tax (sessions, authoritative)** | **46.5%** | **70.6%** |
+| Context tax (conversations, shape) | 68.8% | 71.0% |
+| Sessions that go heavy (>100k) | 38% | 40% |
+| Heavy-vs-light \$/call ratio | 2.7× | 2.7× |
+| Post-heavy share of heavy-session cost | 87% | 86% |
+
+**Two things stand out:**
+
+1. **The context tax is much higher for Claude Code alone: 70.6% vs 46.5%.** The
+   headline 46.5% was *diluted by non-Claude agents*. Claude Code spends ~**71 cents
+   of every dollar** re-reading accumulated context — a far stronger context-rot
+   signature than the pooled figure suggested.
+
+2. **The two tables now agree.** For all-agents the authoritative `sessions` tax
+   (46.5%) diverged sharply from the `conversations` shape tax (68.8%); for Claude
+   Code they converge at **~71%**. The all-agents divergence was an artifact of a
+   few **giant non-Claude outlier sessions** (the \$2,501 max session is *not*
+   Claude Code — CC's max is \$946) whose large non-cache spend inflated the
+   pooled `sessions` denominator. Claude Code is 82.9% of sessions but only **60% of
+   spend**, so the non-Claude tail is disproportionately expensive and was distorting
+   the blended numbers.
+
+### Per-turn heavy table — Claude Code only
+
+Same per-turn analysis as Finding 2, restricted to Claude Code (36,119 billed
+turns / 4,703 sessions). Each billed turn is flagged heavy/light by *its own*
+context size; "vs light" = \$/heavy(>T) ÷ \$/light(≤T).
+
+| Heavy line T | Heavy turns (all sessions) | Sessions w/ ≥1 heavy turn | Avg heavy turns per heavy session | Avg \$ / heavy turn | Cache-read share | vs light turn |
+|---|---|---|---|---|---|---|
+| **100k** | 17,196 (47.6% of turns) | **1,861 (39.6%)** | 9.2 | \$0.133 | 77% | **2.7×** |
+| **250k** | 4,242 (11.7%) | 156 (3.3%) | 27.2 | \$0.256 | 83% | **3.9×** |
+| **500k** | 1,170 (3.2%) | 31 (0.7%) | 37.7 | **\$0.373** | **86%** | **4.7×** |
+
+![Context rot in dollars — Claude Code only](context_rot_curve_claude_code.png)
+
+### Window occupancy — Claude Code only
+
+Per-turn context size: median **96k**, p90 **282k**, p99 **684k**, max **1.06M**.
+
+| Context ≥ threshold | % of turns | % of sessions (by peak turn) |
+|---|---|---|
+| ≥ 100k | 47.6% | 39.6% |
+| ≥ 250k | 11.7% | 3.3% |
+| ≥ 500k | 3.2% | 0.7% |
+| ≥ 750k | 0.6% | 0.1% |
+| ≥ 1M | ~0.0% | ~0.0% |
+
+These are **within a hair of the all-agents tables** (47.6% vs 47.3% heavy at 100k;
+\$0.133 vs \$0.132/heavy turn; median 96k vs 95k). That's expected: Claude Code is
+**94% of the billed turns** in `conversations` (36,119 / 38,549), so the per-turn
+*shape* is dominated by Claude Code already. The big divergence (the context tax,
+46.5% → 70.6%) lives only in the **session-level dollar totals**, where a few giant
+non-Claude outlier sessions had inflated the pooled denominator.
+
+The per-turn *shape* (rot curve, 2.7× heavy ratio, ~86% post-heavy) is essentially
+identical, confirming context rot behaves the same — only the **magnitude of the
+tax** was being understated for Claude Code by the agent mix.
+
+*Re-run was the same code as `context_rot_cost_full.py` with an `agent == "Claude
+Code"` filter on both tables; all-agents figures reproduced the report exactly
+(\$8.31/session, 46.5% tax, \$48,644 total, 2.7×/3.8×/4.7×, occupancy median 95k)
+as a sanity check.*
+
+---
+
 ## Caveats
 
 1. **Estimates, not bills** — token counts × public Anthropic rates.
-2. **Two tables, two roles** — absolute dollars come from the complete `sessions`
+2. **All-agents vs Claude-Code-only** — the main report pools all agents; the
+   "Claude Code only (re-run)" section isolates the 82.9% Claude Code subset
+   (context tax rises to 70.6%).
+3. **Two tables, two roles** — absolute dollars come from the complete `sessions`
    aggregates; per-turn shape (thresholds, rot curve, occupancy) comes from
    `conversations`, whose per-row token columns undercount *totals* ~10–100× and
    so are used only for *shape*, not totals.
-3. **Money only** — this measures the *dollar* cost of heavy context. Context rot
+4. **Money only** — this measures the *dollar* cost of heavy context. Context rot
    is also a *quality* effect (degradation as the window fills) that this analysis
    does not capture.
 
@@ -184,3 +268,13 @@ to re-reading accumulated context**, and within the sessions that go heavy
 (>100k tokens), about **87% of their cost is incurred *after* they go heavy**
 (~75% per typical session). The money lives in the long-context tail — once a
 session goes heavy, that's where almost all the dollars are spent.
+
+> **Does this conclusion hold for Claude Code only? Yes — and stronger.** Every
+> per-turn / structural claim carries over essentially unchanged (heavy turn
+> ≈\$0.13 at ~77% cache-read, light ≈\$0.05, >500k ≈\$0.37 / 4.7×, ~86% of a heavy
+> session's cost lands after it goes heavy). The only figures that change are the
+> money headlines, and they make the case *sharper*: avg **\$6.01/session** (vs
+> \$8.31 pooled) and a context tax of **70.6%, not 46.5%** — so for Claude Code it's
+> not "half" of spend re-reading context, it's closer to **~71% (two-thirds-plus)**.
+> The 46.5% pooled figure was diluted by non-Claude agents and a few giant
+> non-Claude outlier sessions; see "Claude Code only (re-run)" above.
