@@ -361,7 +361,7 @@ All run **offline only if pointed at a local judge** (Ollama/vLLM); defaults cal
 | **Inspect AI** (UK AISI) | MIT | Most rigorous; custom scorers with Score.explanation, model-graded scorers. Reusable classifier. | ✅ local provider | Targets its own eval logs; needs JSONL→EvalLog converter |
 | **promptfoo llm-rubric** | MIT | YAML-config judge → {reason, score, pass}. Pick this if you prefer config over Python. | ✅ vLLM/Ollama provider | Default grader is GPT-4o; "Tracing" is live OTLP only |
 
-### Next steps
+### Next stepsjbcentral login --enterprise
 
 **The winning architecture:** Use `AgentTrace` as the **signal harvester** (per-turn cache/cost, identical-command loops, user-correction friction, tool failures), then feed suspicious regions to a **local G-Eval or Inspect-AI rubric** that surfaces the actual error text and explains the root cause. That's the combination that exceeds AgentTrace alone.
 

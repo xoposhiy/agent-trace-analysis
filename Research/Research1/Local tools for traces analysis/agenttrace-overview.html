@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agenttrace overview</title>
+<link rel="icon" href="data:,">
+<style>
+:root{color-scheme:dark;--bg:#07090b;--panel:#101419;--line:#273039;--text:#f4f0dd;--muted:#a9a391;--green:#54ff00;--cyan:#00d8ff;--amber:#ffb000;--red:#ff4a4a}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b0f12,#050607);color:var(--text);font:15px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+main{max-width:1180px;margin:0 auto;padding:32px 18px 48px}header{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:24px}
+h1{font-size:clamp(42px,7vw,88px);line-height:.9;margin:0;letter-spacing:0}h2{margin:0 0 14px;font-size:20px;color:var(--cyan)}p{margin:10px 0 0;color:var(--muted)}
+.brand{color:var(--green);font-weight:800}.meta{text-align:right;color:var(--muted)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:24px 0}.metric{background:var(--panel);padding:18px;min-height:120px}.metric span{display:block;color:var(--muted);font-size:12px;text-transform:uppercase}.metric strong{display:block;margin-top:12px;font-size:30px;color:var(--green)}.warn strong{color:var(--amber)}.bad strong{color:var(--red)}
+section{border:1px solid var(--line);background:rgba(16,20,25,.78);padding:20px;margin-top:20px}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;text-transform:uppercase}td.num,th.num{text-align:right}.health-good{color:var(--green)}.health-warn{color:var(--amber)}.health-bad{color:var(--red)}code{color:var(--cyan)}@media(max-width:760px){header{display:block}.meta{text-align:left;margin-top:16px}.grid{grid-template-columns:1fr}table{font-size:13px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<div><div class="brand">agenttrace</div><h1>AI agent session overview</h1><p>Static report generated from local coding-agent traces.</p></div>
+<div class="meta">v0.5.4<br>112 Sessions<br><code>agenttrace --overview -f html</code></div>
+</header>
+<div class="grid" aria-label="summary metrics">
+<div class="metric"><span>Sessions</span><strong>112</strong><p>109 Healthy / 3 Warning / 0 Critical</p></div>
+<div class="metric"><span>Total tokens</span><strong>37943907</strong><p>+ live</p></div>
+<div class="metric"><span>Average health</span><strong>98.5</strong><p>Fleet quality score</p></div>
+<div class="metric"><span>Total estimated cost</span><strong>$133.78</strong><p>Estimated session cost</p></div>
+<div class="metric "><span>Tool failures</span><strong>63/669</strong><p>9.4% failure rate</p></div>
+</div>
+<section><h2>Tool authority</h2>
+<p><strong>Highest category</strong>: <code>unknown_authority</code></p>
+<table><caption>Authority category counts</caption><thead><tr><th>Authority category</th><th class="num">Count</th></tr></thead><tbody>
+<tr><td><code>git_write</code></td><td class="num">2</td></tr>
+<tr><td><code>network_access</code></td><td class="num">257</td></tr>
+<tr><td><code>package_install</code></td><td class="num">38</td></tr>
+<tr><td><code>read_only_files</code></td><td class="num">114</td></tr>
+<tr><td><code>shell_exec</code></td><td class="num">74</td></tr>
+<tr><td><code>test_or_build</code></td><td class="num">1</td></tr>
+<tr><td><code>unknown_authority</code></td><td class="num">154</td></tr>
+<tr><td><code>write_files</code></td><td class="num">30</td></tr>
+</tbody></table>
+<p><strong>High-authority tools</strong>: <code>Agent</code>, <code>AskUserQuestion</code>, <code>Bash</code>, <code>Edit</code>, <code>Skill</code>, <code>StructuredOutput</code>, <code>WebFetch</code>, <code>WebSearch</code>, <code>Workflow</code>, <code>Write</code></p>
+</section>
+<section><h2>Possible cost drivers</h2><table><thead><tr><th>Session</th><th>Evidence</th></tr></thead><tbody>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+<tr><td>agent-a24acce8935028461</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>possible driver: 6 large tool parameter/output event(s)</td></tr>
+<tr><td>agent-a43236f1e13928197</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+<tr><td>agent-aa524788f0b179341</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+<tr><td>agent-a3c0cc8b8699d28b4</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+<tr><td>agent-a43b42a2e8a8137b0</td><td>possible driver: retry loop or repeated tool output evidence</td></tr>
+</tbody></table></section>
+<section><h2>Health Trend</h2><p>Improving: 100→100</p></section>
+<section><h2>Incident timeline</h2>
+<table><thead><tr><th>Session</th><th>Signal</th><th>Evidence</th><th>Severity</th></tr></thead><tbody>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>Last milestone</td><td>76 assistant turn(s) completed over 20.6m</td><td>LOW</td></tr>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>Longest idle gap</td><td>240.5s gap between recorded events</td><td>MEDIUM</td></tr>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>Failure loop</td><td>Edit repeated the same result 4 time(s)</td><td>HIGH</td></tr>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>Touched surface</td><td>3 unique tool(s), 39 total calls; top tool Bash x30</td><td>LOW</td></tr>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>Burn divergence</td><td>$0.3900 loop cost inside $9.5108 total</td><td>HIGH</td></tr>
+<tr><td>cdc9fddb-3994-4b61-afaf-a059206c2bf6</td><td>Last milestone</td><td>2 assistant turn(s) completed over 32s</td><td>LOW</td></tr>
+<tr><td>cdc9fddb-3994-4b61-afaf-a059206c2bf6</td><td>Touched surface</td><td>1 unique tool(s), 1 total calls; top tool Read x1</td><td>LOW</td></tr>
+<tr><td>cdc9fddb-3994-4b61-afaf-a059206c2bf6</td><td>Burn divergence</td><td>26602 tokens per assistant turn across 2 turn(s)</td><td>MEDIUM</td></tr>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>Last milestone</td><td>17 assistant turn(s) completed over 15h 55m</td><td>LOW</td></tr>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>Longest idle gap</td><td>56811.9s gap between recorded events</td><td>HIGH</td></tr>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>Touched surface</td><td>3 unique tool(s), 8 total calls; top tool Bash x6</td><td>LOW</td></tr>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>Burn divergence</td><td>$0.0750 loop cost inside $1.3932 total</td><td>HIGH</td></tr>
+<tr><td>agent-ab38602b703d2a1e1</td><td>Last milestone</td><td>3 assistant turn(s) completed over 27s</td><td>LOW</td></tr>
+<tr><td>agent-ab38602b703d2a1e1</td><td>Touched surface</td><td>1 unique tool(s), 1 total calls; top tool Read x1</td><td>LOW</td></tr>
+<tr><td>agent-ab38602b703d2a1e1</td><td>Burn divergence</td><td>13508 tokens per assistant turn across 3 turn(s)</td><td>MEDIUM</td></tr>
+<tr><td>agent-a24acce8935028461</td><td>Last milestone</td><td>7 assistant turn(s) completed over 1.0m</td><td>LOW</td></tr>
+<tr><td>agent-a24acce8935028461</td><td>Touched surface</td><td>2 unique tool(s), 4 total calls; top tool Bash x3</td><td>LOW</td></tr>
+<tr><td>agent-a24acce8935028461</td><td>Burn divergence</td><td>$0.0525 loop cost inside $0.5780 total</td><td>HIGH</td></tr>
+<tr><td>agent-a4ff9424029451bea</td><td>Last milestone</td><td>3 assistant turn(s) completed over 20s</td><td>LOW</td></tr>
+<tr><td>agent-a4ff9424029451bea</td><td>Touched surface</td><td>1 unique tool(s), 1 total calls; top tool Read x1</td><td>LOW</td></tr>
+<tr><td>agent-a4ff9424029451bea</td><td>Burn divergence</td><td>22965 tokens per assistant turn across 3 turn(s)</td><td>MEDIUM</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>Last milestone</td><td>138 assistant turn(s) completed over 17.3m</td><td>LOW</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>Longest idle gap</td><td>76.6s gap between recorded events</td><td>MEDIUM</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>Failure loop</td><td>StructuredOutput repeated the same result 8 time(s)</td><td>HIGH</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>Touched surface</td><td>1 unique tool(s), 69 total calls; top tool StructuredOutput x69</td><td>LOW</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>Burn divergence</td><td>$1.5375 loop cost inside $28.2448 total</td><td>HIGH</td></tr>
+<tr><td>agent-ab79966945eeb5729</td><td>Last milestone</td><td>7 assistant turn(s) completed over 28s</td><td>LOW</td></tr>
+<tr><td>agent-ab79966945eeb5729</td><td>Touched surface</td><td>4 unique tool(s), 4 total calls; top tool StructuredOutput x1</td><td>LOW</td></tr>
+<tr><td>agent-ab79966945eeb5729</td><td>Burn divergence</td><td>11048 tokens per assistant turn across 7 turn(s)</td><td>MEDIUM</td></tr>
+</tbody></table>
+</section>
+<section><h2>Recent sessions</h2><table><thead><tr><th>Session</th><th>Source</th><th>Model</th><th class="num">Total tokens</th><th class="num">Cost</th><th class="num">Health</th><th class="num">Anomalies</th></tr></thead><tbody>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">2902893</td><td class="num">$9.5108</td><td class="num health-good">88</td><td class="num">1</td></tr>
+<tr><td>cdc9fddb-3994-4b61-afaf-a059206c2bf6</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">53205</td><td class="num">$0.4514</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">343252</td><td class="num">$1.3932</td><td class="num health-warn">70</td><td class="num">1</td></tr>
+<tr><td>agent-ab38602b703d2a1e1</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">40526</td><td class="num">$0.5032</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-a24acce8935028461</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">71873</td><td class="num">$0.5780</td><td class="num health-good">88</td><td class="num">1</td></tr>
+<tr><td>agent-a4ff9424029451bea</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">68896</td><td class="num">$1.1681</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>wf_e15bb46a-aa0</td><td>Generic JSON/JSONL</td><td>default</td><td class="num">0</td><td class="num">$0.0000</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">11870566</td><td class="num">$28.2448</td><td class="num health-warn">58</td><td class="num">2</td></tr>
+<tr><td>agent-ab79966945eeb5729</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">77338</td><td class="num">$0.5908</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-aef07e1af0ce669c5</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">77013</td><td class="num">$0.5829</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-a8c45fe73f80bda43</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">68002</td><td class="num">$0.4932</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-a325eb092d5b41dc3</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">67381</td><td class="num">$0.4979</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-a719ee525eda8ef38</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">57244</td><td class="num">$0.3846</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-a094467f1cd60e99f</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">76529</td><td class="num">$0.5686</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-a3f8ba2ca9774ce06</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">100364</td><td class="num">$0.6198</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-ae2096ae678960c85</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">84827</td><td class="num">$0.4846</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-af9a123392a553f05</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">78003</td><td class="num">$0.4601</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-ac7bf433510e1d181</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">65888</td><td class="num">$0.4685</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-ab8f9f5ade8fe0b61</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">53903</td><td class="num">$0.3686</td><td class="num health-good">100</td><td class="num">0</td></tr>
+<tr><td>agent-ad8ef212bbef615a0</td><td>Claude Code</td><td>claude-opus-4-8</td><td class="num">88236</td><td class="num">$0.5462</td><td class="num health-good">96</td><td class="num">1</td></tr>
+</tbody></table></section>
+<section><h2>By agent</h2><table><thead><tr><th>Agent</th><th class="num">Sessions</th><th class="num">Cost</th></tr></thead><tbody>
+<tr><td>Claude Code</td><td class="num">110</td><td class="num">$133.78</td></tr>
+<tr><td>Generic JSON/JSONL</td><td class="num">2</td><td class="num">$0.00</td></tr>
+</tbody></table></section>
+<section><h2>By model</h2><table><thead><tr><th>Model</th><th class="num">Sessions</th><th class="num">Cost</th></tr></thead><tbody>
+<tr><td>claude-opus-4-8</td><td class="num">110</td><td class="num">$133.78</td></tr>
+<tr><td>default</td><td class="num">2</td><td class="num">$0.00</td></tr>
+</tbody></table></section>
+<section><h2>Recent anomalies</h2>
+<table><thead><tr><th>Session</th><th>Type</th><th>Age</th></tr></thead><tbody>
+<tr><td>7a001f6a-d580-4c53-947e-7ce9dc37928f</td><td>hanging</td><td>now</td></tr>
+<tr><td>a7526c9f-0e90-43ae-a21c-2fa69d61a512</td><td>hanging</td><td>now</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>tool failures</td><td>now</td></tr>
+<tr><td>63f0bb29-bb78-4a0e-95a6-e755d91a3efe</td><td>hanging</td><td>now</td></tr>
+<tr><td>agent-a24acce8935028461</td><td>tool failures</td><td>now</td></tr>
+<tr><td>agent-ab383d9fc8c5f98a8</td><td>hanging</td><td>now</td></tr>
+<tr><td>agent-ac08d2b438d95d928</td><td>hanging</td><td>now</td></tr>
+<tr><td>agent-a5bbb4299a497ab61</td><td>latency</td><td>now</td></tr>
+<tr><td>agent-a8ab1e83174c7910b</td><td>latency</td><td>now</td></tr>
+<tr><td>agent-a92715c115f0bc44b</td><td>latency</td><td>now</td></tr>
+<tr><td>agent-a92c2cfa985b0d312</td><td>latency</td><td>now</td></tr>
+<tr><td>agent-ad3dcb6f97093ce16</td><td>latency</td><td>now</td></tr>
+<tr><td>agent-ad8ef212bbef615a0</td><td>latency</td><td>now</td></tr>
+<tr><td>agent-aed79e083d020b8fa</td><td>latency</td><td>now</td></tr>
+</tbody></table>
+</section>
+</main>
+</body>
+</html>
+
