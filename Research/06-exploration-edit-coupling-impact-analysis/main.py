@@ -1,20 +1,10 @@
 """
-main.py — Context-coupling & session-splitting analysis on the SWE-chat dataset.
+main.py — Context-coupling analysis on the SWE-chat dataset.
 
-FOCUS OF THIS VERSION:
-    Detect the MOMENT a user should have started a NEW session instead of
-    continuing in the same one, and measure how much old context was
-    dragged along past that moment.
-
-RESULT: detected via TIME GAPS between user messages (Section F below).
-A real elapsed-time gap is an objective behavioral fact, independent of
-what the work is about. ~35% of long sessions have a 4+ hour gap between
-user messages — a natural point where a fresh session would plausibly
-have made more sense than continuing.
-
-(Word-overlap, file-based, and issue-tracker approaches were also tried
-and did not produce a reliable signal — see the accompanying report for
-that history. They are left out of this file to keep it to what works.)
+WHAT THIS FILE DOES:
+    Measures, on real long Claude Code sessions, how much of the agent's
+    work is exploration (reading), editing, or execution (running
+    commands), and what that costs in tokens/money.
 
 SECTIONS (run all, or comment out what you don't need in main()):
     A — shared setup (load data, long-session filter, transcript reader)
@@ -22,7 +12,6 @@ SECTIONS (run all, or comment out what you don't need in main()):
     C — Step 3: tool categories (adds "execution")
     D — Step 4: token weight per category (exploration = biggest)
     E — Step 5: exploration cost + Viewer-style saving estimate
-    F — task-switch detection via TIME GAP
 
 Requirements: pip install datasets huggingface_hub
 The dataset is gated: accept terms on huggingface.co and run `hf auth login` first.
@@ -31,25 +20,24 @@ The dataset is gated: accept terms on huggingface.co and run `hf auth login` fir
 from huggingface_hub import hf_hub_download
 from datasets import load_dataset
 from collections import Counter
-from datetime import datetime
 import json
 
 REPO = "SALT-NLP/SWE-chat"
 LONG_SESSION_MIN_TURNS = 30
 
-# Opus 4.5 pricing ($ per token) — used by Step 5 and Section F's $ savings
+# Opus 4.5 pricing ($ per token) — used by Step 5
 BASE_INPUT = 5.00
-BASE_OUTPUT = 25.00
-P_IN    = BASE_INPUT  / 1_000_000
-P_OUT   = BASE_OUTPUT / 1_000_000
 P_WRITE = BASE_INPUT * 1.25 / 1_000_000     # cache write
 P_READ  = BASE_INPUT * 0.10 / 1_000_000     # cache read
 VIEWER_FILTER_RATE = 0.60                   # SWE-Edit's measured filter rate
-HANDOFF_TOKENS = 5_000                      # size of the "catch-up" summary at each split
 
-# Section F — absolute, human-meaningful time-gap thresholds
-GAP_THRESHOLDS = [15*60, 30*60, 60*60, 4*60*60, 24*60*60]
-GAP_LABELS = ["15 min", "30 min", "1 hour", "4 hours", "24 hours"]
+# Bash commands that only READ (don't change anything) — used to tell
+# "bash grep" or "bash cat" apart from a real build/test/execute command.
+# See categorize() below — item 4 of the feedback.
+READ_ONLY_BASH_COMMANDS = {
+    "cat", "grep", "find", "ls", "head", "tail", "wc",
+    "less", "more", "tree", "pwd", "which", "file", "diff",
+}
 
 
 # ======================================================================
@@ -63,26 +51,41 @@ def load_tables():
     return sessions, logs
 
 
-def is_long(s):
-    """A 'long' session: has token data, >30 turns, and is Claude Code."""
-    return (s["input_tokens"]
-            and s["turn_count"] and s["turn_count"] > LONG_SESSION_MIN_TURNS
-            and s["agent"] == "Claude Code")
+def is_long(session):
+    """A 'long' session: has token data, >30 turns, and is Claude Code.
+
+    NOTE (only Claude Code): the parsing below (message.content shape,
+    tool_use/tool_result blocks, the usage field) matches Claude Code's
+    transcript format specifically. Verified by sampling real transcripts
+    from every agent in the dataset:
+      - Codex and Copilot CLI use completely different event schemas (not
+        assistant/user/tool_use at all).
+      - Cursor's events are missing their "type" field entirely.
+      - OpenCode and Gemini CLI mostly fail to parse as JSON in this
+        format: 7 of 10 sampled Gemini CLI sessions threw a JSON error;
+        the one that looked Claude-Code-shaped was not representative.
+    So including these agents would silently misread most of their
+    transcripts, not just skip them. Kept as Claude-Code-only — confirmed,
+    not assumed.
+    """
+    return (session["input_tokens"]
+            and session["turn_count"] and session["turn_count"] > LONG_SESSION_MIN_TURNS
+            and session["agent"] == "Claude Code")
 
 
 def long_session_ids(sessions):
-    return [s["session_id"] for s in sessions if is_long(s)]
+    return [session["session_id"] for session in sessions if is_long(session)]
 
 
 def path_map(logs):
-    return {l["session_id"]: l["transcript_path"] for l in logs}
+    return {log["session_id"]: log["transcript_path"] for log in logs}
 
 
-def read_transcript(sid, paths):
+def read_transcript(session_id, paths):
     """Download (cached) and parse one transcript into a list of events."""
-    p = hf_hub_download(REPO, paths[sid], repo_type="dataset")
+    local_path = hf_hub_download(REPO, paths[session_id], repo_type="dataset")
     events = []
-    with open(p) as f:
+    with open(local_path) as f:
         for line in f:
             try:
                 events.append(json.loads(line))
@@ -91,30 +94,63 @@ def read_transcript(sid, paths):
     return events
 
 
-def categorize(tool):
-    """Sort a tool name into one of four activity categories."""
-    t = tool.lower()
-    if any(k in t for k in ["read", "grep", "glob", "lsp", "search", "fetch"]):
+def is_read_only_bash_command(tool_input):
+    """
+    A Bash call can run a read-only command (cat, grep, find, ls, ...),
+    which is really exploration, not execution — or a real build/test/git
+    command, which is execution. Judging by the tool NAME alone ("Bash")
+    can't tell these apart, so this looks at the actual command text.
+    (Feedback item 4: "bash grep is also exploration.")
+    """
+    if not isinstance(tool_input, dict):
+        return False
+    command = tool_input.get("command", "")
+    if not isinstance(command, str) or not command.strip():
+        return False
+    first_word = command.strip().split()[0]
+    return first_word in READ_ONLY_BASH_COMMANDS
+
+
+def categorize(tool_name, tool_input=None):
+    """
+    Sort a tool call into one of four activity categories. For Bash calls,
+    look at the actual command (see is_read_only_bash_command) instead of
+    assuming every Bash call is "execution" — a plain `grep`/`cat`/`find`
+    run through Bash is exploration, not execution.
+    """
+    name = tool_name.lower()
+    if any(keyword in name for keyword in ["read", "grep", "glob", "lsp", "search", "fetch"]):
         return "exploration"
-    if any(k in t for k in ["edit", "write"]) and "todowrite" not in t:
+    if any(keyword in name for keyword in ["edit", "write"]) and "todowrite" not in name:
         return "editing"
-    if "bash" in t:
+    if "bash" in name:
+        if is_read_only_bash_command(tool_input):
+            return "exploration"
         return "execution"
     return "coordination"
 
 
-def is_exploration(tool):
-    t = tool.lower()
-    return any(k in t for k in ["read", "grep", "glob", "lsp", "search", "fetch"])
+def is_exploration(tool_name, tool_input=None):
+    """
+    Whether a tool call counts as exploration. Reuses categorize() instead
+    of keeping a second copy of the keyword list (feedback item 2: the two
+    lists could silently drift apart).
+    """
+    return categorize(tool_name, tool_input) == "exploration"
 
 
-def text_len(x):
-    """Rough token estimate for any tool result: characters / 4."""
-    if x is None:
+def estimate_tokens(value):
+    """
+    Rough token estimate for any tool result: characters / 4. (Feedback
+    item 1: the old function name/docstring said "tokens" but returned
+    characters, and callers divided by 4 outside the function — the /4 is
+    now done here, so the function's name matches what it returns.)
+    """
+    if value is None:
         return 0
-    if isinstance(x, str):
-        return len(x)
-    return len(json.dumps(x))
+    if isinstance(value, str):
+        return len(value) / 4
+    return len(json.dumps(value)) / 4
 
 
 # ======================================================================
@@ -126,19 +162,19 @@ def step_1_2(sessions):
     print("STEP 1+2 — long sessions, exploration vs editing")
     print("=" * 60)
 
-    longs = [s for s in sessions if is_long(s)]
+    longs = [session for session in sessions if is_long(session)]
     print("long Claude Code sessions (>30 turns):", len(longs))
 
     total_research = total_action = usable = 0
     per_session = []
-    for s in longs:
-        if not s["research_count"] or not s["action_count"]:
+    for session in longs:
+        if not session["research_count"] or not session["action_count"]:
             continue
-        total_research += s["research_count"]
-        total_action += s["action_count"]
+        total_research += session["research_count"]
+        total_action += session["action_count"]
         usable += 1
-        tot = s["research_count"] + s["action_count"]
-        per_session.append(s["research_count"] / tot)
+        total = session["research_count"] + session["action_count"]
+        per_session.append(session["research_count"] / total)
 
     both = total_research + total_action
     print("sessions with both counts:", usable)
@@ -158,14 +194,15 @@ def step_3_categories(long_ids, paths):
 
     cat_counts = Counter()
     n_ok = n_skipped = 0
-    for sid in long_ids:
+    for session_id in long_ids:
         try:
-            for e in read_transcript(sid, paths):
-                if e.get("type") != "assistant":
+            for event in read_transcript(session_id, paths):
+                if event.get("type") != "assistant":
                     continue
-                for b in e["message"].get("content", []):
-                    if isinstance(b, dict) and b.get("type") == "tool_use":
-                        cat_counts[categorize(b.get("name", ""))] += 1
+                for block in event["message"].get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        cat = categorize(block.get("name", ""), block.get("input", {}))
+                        cat_counts[cat] += 1
             n_ok += 1
         except Exception:
             n_skipped += 1
@@ -173,8 +210,8 @@ def step_3_categories(long_ids, paths):
     total = sum(cat_counts.values()) or 1
     print("sessions read:", n_ok, "| skipped:", n_skipped, "| total tool calls:", f"{total:,}")
     for cat in ["exploration", "editing", "execution", "coordination"]:
-        c = cat_counts[cat]
-        print(f"  {cat:14s} {c:>8,}  ({100*c/total:.0f}%)")
+        count = cat_counts[cat]
+        print(f"  {cat:14s} {count:>8,}  ({100*count/total:.0f}%)")
 
 
 # ======================================================================
@@ -190,27 +227,27 @@ def step_4_tokens(long_ids, paths):
     cat_tokens = Counter()
     matched = unmatched = n_ok = n_skipped = 0
 
-    for sid in long_ids:
+    for session_id in long_ids:
         try:
             id_to_cat = {}
-            for e in read_transcript(sid, paths):
-                msg = e.get("message", {})
-                content = msg.get("content") if isinstance(msg, dict) else None
-                if e.get("type") == "assistant" and isinstance(content, list):
-                    for b in content:
-                        if isinstance(b, dict) and b.get("type") == "tool_use":
-                            cat = categorize(b.get("name", ""))
-                            id_to_cat[b.get("id")] = cat
+            for event in read_transcript(session_id, paths):
+                message = event.get("message", {})
+                content = message.get("content") if isinstance(message, dict) else None
+                if event.get("type") == "assistant" and isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            cat = categorize(block.get("name", ""), block.get("input", {}))
+                            id_to_cat[block.get("id")] = cat
                             cat_calls[cat] += 1
                 if isinstance(content, list):
-                    for b in content:
-                        if isinstance(b, dict) and b.get("type") == "tool_result":
-                            tid = b.get("tool_use_id")
-                            if tid in id_to_cat:
-                                cat = id_to_cat[tid]; matched += 1
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            tool_use_id = block.get("tool_use_id")
+                            if tool_use_id in id_to_cat:
+                                cat = id_to_cat[tool_use_id]; matched += 1
                             else:
                                 cat = "coordination"; unmatched += 1
-                            cat_tokens[cat] += text_len(b.get("content")) / 4
+                            cat_tokens[cat] += estimate_tokens(block.get("content"))
             n_ok += 1
         except Exception:
             n_skipped += 1
@@ -221,8 +258,9 @@ def step_4_tokens(long_ids, paths):
     tot_tokens = sum(cat_tokens.values()) or 1
     print(f"\n{'category':14s} {'calls':>10s} {'call%':>7s} {'tokens(M)':>11s} {'token%':>8s}")
     for cat in ["exploration", "editing", "execution", "coordination"]:
-        c = cat_calls[cat]; tk = cat_tokens[cat]
-        print(f"{cat:14s} {c:>10,} {100*c/tot_calls:>6.0f}% {tk/1e6:>10.1f}M {100*tk/tot_tokens:>7.0f}%")
+        count = cat_calls[cat]; tokens = cat_tokens[cat]
+        print(f"{cat:14s} {count:>10,} {100*count/tot_calls:>6.0f}% "
+              f"{tokens/1e6:>10.1f}M {100*tokens/tot_tokens:>7.0f}%")
 
 
 # ======================================================================
@@ -236,32 +274,36 @@ def step_5_savings(long_ids, paths, filter_rate=VIEWER_FILTER_RATE):
 
     total_expl_cost = total_all_cost = 0.0
     n_ok = n_skipped = 0
-    for sid in long_ids:
+    for session_id in long_ids:
         try:
-            events = read_transcript(sid, paths)
-            N = sum(1 for e in events if e.get("type") == "assistant")
-            if N == 0:
+            events = read_transcript(session_id, paths)
+            total_turns = sum(1 for event in events if event.get("type") == "assistant")
+            if total_turns == 0:
                 continue
-            id_to_name = {}
+            id_to_call = {}     # tool_use id -> (name, input, turn_number)
             turn_no = 0
-            for e in events:
-                msg = e.get("message", {})
-                content = msg.get("content") if isinstance(msg, dict) else None
-                if e.get("type") == "assistant":
+            for event in events:
+                message = event.get("message", {})
+                content = message.get("content") if isinstance(message, dict) else None
+                if event.get("type") == "assistant":
                     turn_no += 1
                     if isinstance(content, list):
-                        for b in content:
-                            if isinstance(b, dict) and b.get("type") == "tool_use":
-                                id_to_name[b.get("id")] = (b.get("name", ""), turn_no)
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                id_to_call[block.get("id")] = (
+                                    block.get("name", ""), block.get("input", {}), turn_no
+                                )
                 if isinstance(content, list):
-                    for b in content:
-                        if isinstance(b, dict) and b.get("type") == "tool_result":
-                            name, t = id_to_name.get(b.get("tool_use_id"), (None, turn_no))
-                            R = text_len(b.get("content")) / 4
-                            remaining = max(N - t, 0)
-                            life_cost = R * (P_WRITE + remaining * P_READ)
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            name, tool_input, turn = id_to_call.get(
+                                block.get("tool_use_id"), (None, None, turn_no)
+                            )
+                            result_tokens = estimate_tokens(block.get("content"))
+                            remaining = max(total_turns - turn, 0)
+                            life_cost = result_tokens * (P_WRITE + remaining * P_READ)
                             total_all_cost += life_cost
-                            if name and is_exploration(name):
+                            if name and is_exploration(name, tool_input):
                                 total_expl_cost += life_cost
             n_ok += 1
         except Exception:
@@ -276,235 +318,6 @@ def step_5_savings(long_ids, paths, filter_rate=VIEWER_FILTER_RATE):
 
 
 # ======================================================================
-# Section F — task-switch detection via TIME GAP
-# ======================================================================
-#
-# A real elapsed-time gap between one user message and the next is an
-# objective behavioral fact, independent of what the work is about. A long
-# gap is exactly the kind of moment where a fresh session would make sense
-# — the person's own train of thought reset, so the old context is stale
-# regardless of whether the next message is the same task or a new one.
-#
-# The threshold is an ABSOLUTE, human-meaningful gap size (not a relative
-# percentile of this dataset — its gaps are almost all a few seconds, so
-# a relative percentile would only mean "a few minutes", not a real break).
-
-def parse_ts(ts):
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def user_gaps_in_order(events):
-    """
-    Return (gaps, total_turns). gaps = [(turn_number, gap_seconds), ...],
-    the elapsed time between one user message and the next, tagged with
-    the assistant-turn count so far.
-    """
-    turn_no = 0
-    last_ts = None
-    gaps = []
-    for e in events:
-        if e.get("type") == "assistant":
-            turn_no += 1
-        if e.get("type") == "user":
-            ts = parse_ts(e.get("timestamp"))
-            if ts is None:
-                continue
-            if last_ts is not None:
-                gap_seconds = (ts - last_ts).total_seconds()
-                if gap_seconds > 0:              # ignore clock oddities
-                    gaps.append((turn_no, gap_seconds))
-            last_ts = ts
-    return gaps, turn_no
-
-
-def percentile(values, p):
-    if not values:
-        return None
-    s = sorted(values)
-    return s[min(int(len(s) * p), len(s) - 1)]
-
-
-def section_f_time_gap(long_ids, paths):
-    print("\n" + "=" * 60)
-    print("SECTION F — task-switch detection via TIME GAP")
-    print("=" * 60)
-
-    per_session = {}
-    all_gap_seconds = []
-    n_skipped = 0
-
-    for sid in long_ids:
-        try:
-            events = read_transcript(sid, paths)
-            gaps, total_turns = user_gaps_in_order(events)
-            if not gaps or total_turns == 0:
-                continue
-            per_session[sid] = (gaps, total_turns)
-            all_gap_seconds.extend(g for _, g in gaps)
-        except Exception:
-            n_skipped += 1
-
-    if not all_gap_seconds:
-        print("no usable timestamp data found")
-        return
-
-    print(f"sessions with usable timestamps: {len(per_session)} | skipped: {n_skipped}")
-    p50 = percentile(all_gap_seconds, 0.50)
-    p95 = percentile(all_gap_seconds, 0.95)
-    print(f"gap distribution across ALL sessions: median={p50:,.0f}s | 95th pct={p95:,.0f}s")
-
-    for label, threshold in zip(GAP_LABELS, GAP_THRESHOLDS):
-        n_with_gap = 0
-        switch_positions = []
-        for sid, (gaps, total_turns) in per_session.items():
-            big_gaps = [(t, g) for t, g in gaps if g >= threshold]
-            if not big_gaps:
-                continue
-            n_with_gap += 1
-            turn, _ = big_gaps[0]
-            switch_positions.append(min(turn / total_turns, 1.0))
-
-        pct = 100 * n_with_gap / len(per_session)
-        print(f"\n  threshold >= {label}: {n_with_gap} sessions ({pct:.0f}%) have such a gap")
-        if switch_positions:
-            avg_pos = 100 * sum(switch_positions) / len(switch_positions)
-            buckets = [0, 0, 0, 0]
-            for f in switch_positions:
-                buckets[min(int(f * 4), 3)] += 1
-            print(f"    avg position: {avg_pos:.0f}% | spread (0-25/25-50/50-75/75-100): {buckets}")
-
-    print("\nRecommended reading: 4-hour threshold — ~35% coverage, and the position")
-    print("distribution is close to flat (a real spread, not clustered near the start).")
-    print("CAVEAT: a big gap proves the person stepped away, not that the next")
-    print("message is a different TASK — treat as 'a point where restarting would")
-    print("plausibly have helped', not proof the task itself changed.")
-
-
-# ------------------------------------------------------------------------
-# Section F (continued) — how much money splitting at the time gap would save
-# ------------------------------------------------------------------------
-#
-# Same idea and same honest method as the earlier compaction-splitting
-# analysis: use the REAL per-turn `usage` block (input/output/cache-write/
-# cache-read tokens) recorded on each assistant turn, not an estimate. At
-# each detected time-gap split point, the new "chunk" no longer re-reads
-# the old context — approximated by zeroing that turn's cache-read tokens
-# from the split point onward (same simplification used before). A
-# realistic handoff cost is charged once per split: a ~5,000-token summary,
-# which costs both to GENERATE (output tokens) and to CARRY FORWARD into
-# the new chunk's cache (cache-write tokens) — both are included here.
-
-def turn_cost(u):
-    return (u.get("input_tokens", 0) * P_IN
-          + u.get("output_tokens", 0) * P_OUT
-          + u.get("cache_creation_input_tokens", 0) * P_WRITE
-          + u.get("cache_read_input_tokens", 0) * P_READ)
-
-
-def gaps_and_usage_in_order(events):
-    """
-    One pass over a transcript. Returns:
-      - gaps: [(turn_number, gap_seconds), ...] — same as user_gaps_in_order
-      - usage_by_turn: {turn_number: usage_dict} — the real recorded usage
-        on each assistant turn (input/output/cache tokens)
-    Both keyed on the SAME turn counter, so they line up exactly.
-    """
-    turn_no = 0
-    last_ts = None
-    gaps = []
-    usage_by_turn = {}
-    for e in events:
-        if e.get("type") == "assistant":
-            turn_no += 1
-            u = e.get("message", {}).get("usage")
-            if isinstance(u, dict):
-                usage_by_turn[turn_no] = u
-        if e.get("type") == "user":
-            ts = parse_ts(e.get("timestamp"))
-            if ts is not None:
-                if last_ts is not None:
-                    gap_seconds = (ts - last_ts).total_seconds()
-                    if gap_seconds > 0:
-                        gaps.append((turn_no, gap_seconds))
-                last_ts = ts
-    return gaps, usage_by_turn
-
-
-def simulate_split_savings(usage_by_turn, gaps, threshold, handoff_tokens=HANDOFF_TOKENS):
-    """
-    Return (original_cost, split_free_cost, split_real_cost, n_splits) for
-    one session, splitting at every gap >= threshold.
-    """
-    orig = sum(turn_cost(u) for u in usage_by_turn.values())
-    split_turns = sorted(set(t for t, g in gaps if g >= threshold))
-    if not split_turns:
-        return orig, orig, orig, 0
-
-    first_split = split_turns[0]      # once reset, later turns stay "reset" too
-    split_free = 0.0
-    for t, u in usage_by_turn.items():
-        if t >= first_split:
-            reduced = dict(u)
-            reduced["cache_read_input_tokens"] = 0
-            split_free += turn_cost(reduced)
-        else:
-            split_free += turn_cost(u)
-
-    handoff_each = handoff_tokens * P_WRITE + handoff_tokens * P_OUT
-    split_real = split_free + len(split_turns) * handoff_each
-    return orig, split_free, split_real, len(split_turns)
-
-
-def section_f_time_gap_savings(long_ids, paths):
-    print("\n" + "=" * 60)
-    print("SECTION F (continued) — $ saved by splitting at the time gap")
-    print("=" * 60)
-
-    n_ok = n_skipped = 0
-    totals = {label: {"orig": 0.0, "free": 0.0, "real": 0.0, "n_split_sessions": 0}
-              for label in GAP_LABELS}
-
-    for sid in long_ids:
-        try:
-            events = read_transcript(sid, paths)
-            gaps, usage_by_turn = gaps_and_usage_in_order(events)
-            if not usage_by_turn:
-                continue
-            n_ok += 1
-            for label, threshold in zip(GAP_LABELS, GAP_THRESHOLDS):
-                orig, free, real, n_splits = simulate_split_savings(usage_by_turn, gaps, threshold)
-                totals[label]["orig"] += orig
-                totals[label]["free"] += free
-                totals[label]["real"] += real
-                if n_splits > 0:
-                    totals[label]["n_split_sessions"] += 1
-        except Exception:
-            n_skipped += 1
-
-    print("sessions with usable per-turn cost data:", n_ok, "| skipped:", n_skipped)
-    print(f"\n{'threshold':10s} {'sessions split':>14s} {'orig cost':>12s} "
-          f"{'saved (free)':>13s} {'saved (real)':>13s}")
-    for label in GAP_LABELS:
-        t = totals[label]
-        saved_free = t["orig"] - t["free"]
-        saved_real = t["orig"] - t["real"]
-        pct_free = 100 * saved_free / t["orig"] if t["orig"] else 0
-        pct_real = 100 * saved_real / t["orig"] if t["orig"] else 0
-        print(f"{label:10s} {t['n_split_sessions']:>14,} ${t['orig']:>10,.0f} "
-              f"${saved_free:>9,.0f} ({pct_free:>3.0f}%) ${saved_real:>9,.0f} ({pct_real:>3.0f}%)")
-
-    print("\n'free' = an unrealistic best case (the split costs nothing to set up).")
-    print("'real' = charges a ~5,000-token handoff summary per split (its generation")
-    print("as output tokens, plus carrying it into the new chunk as cache tokens).")
-    print("Use the REAL column and the 4-hour row as the headline, honest figure.")
-
-
-# ======================================================================
 # main
 # ======================================================================
 
@@ -513,15 +326,10 @@ def main():
     long_ids = long_session_ids(sessions)
     paths = path_map(logs)
 
-    # Cost/size analyses — comment out any you don't need
     step_1_2(sessions)
     step_3_categories(long_ids, paths)
     step_4_tokens(long_ids, paths)
     step_5_savings(long_ids, paths)
-
-    # Task-switch detection
-    section_f_time_gap(long_ids, paths)
-    section_f_time_gap_savings(long_ids, paths)
 
 
 if __name__ == "__main__":
