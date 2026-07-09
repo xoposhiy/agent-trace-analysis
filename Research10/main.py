@@ -1,0 +1,683 @@
+"""
+main.py — Context-coupling analysis + LLM-judged task-switch detection
+          on the SWE-chat dataset.
+
+WHAT THIS FILE DOES:
+    Part 1 (Sections A-E): measures, on real long Claude Code sessions, how
+    much of the agent's work is exploration (reading), editing, or
+    execution (running commands), and what that costs in tokens/money.
+
+    Part 2 (Section F): detects whether a session contains a genuine task
+    switch, using an LLM as a judge instead of a hand-written heuristic.
+    Earlier attempts (word overlap, file overlap, time gaps — see the
+    project report) all failed to reliably tell apart "one big task
+    spanning many files/words" from "a real new task," because none of
+    them understand MEANING. An LLM can actually read the conversation and
+    judge intent, which is what this section does. It does NOT calculate
+    any dollar savings — that will come from a separate math model.
+
+SECTIONS (run all, or comment out what you don't need in main()):
+    A — shared setup (load data, long-session filter, transcript reader)
+    B — Step 1+2: how many long sessions, exploration vs editing
+    B2 — raw tool-name counts (not categorized), per tool and total
+    C — Step 3: tool categories (adds "execution")
+    D — Step 4: token weight per category (exploration = biggest)
+    E — Step 5: exploration cost + Viewer-style saving estimate
+    F — LLM-as-judge task-switch detection (no dollar savings)
+
+Requirements: pip install datasets huggingface_hub openai
+The dataset is gated: accept terms on huggingface.co and run `hf auth login` first.
+Section F calls Claude through JetBrains' internal LiteLLM proxy
+(https://litellm.labs.jb.gg), using the OpenAI-compatible API. Set your
+LiteLLM key as the OPENAI_API_KEY environment variable (the SDK reads it
+automatically) before running.
+"""
+
+from huggingface_hub import hf_hub_download
+from datasets import load_dataset
+from collections import Counter
+import json
+from openai import OpenAI
+
+# Pure analysis core (parsing, categorisation, phase detection, split pricing)
+# lives in session_core so it can be reused by the offline local CLI too.
+from session_core import (
+    categorize, is_exploration, estimate_tokens, user_prompts_with_turns,
+    build_judge_prompt, extract_tool_sequence, detect_phases,
+    classify_session_pattern, session_token_buckets, saving_for_split,
+    MIN_PHASE_LENGTH,
+)
+
+REPO = "SALT-NLP/SWE-chat"
+LONG_SESSION_MIN_TURNS = 30
+
+# Opus 4.5 pricing ($ per token) — used by Step 5
+BASE_INPUT = 5.00
+P_WRITE = BASE_INPUT * 1.25 / 1_000_000     # cache write
+P_READ  = BASE_INPUT * 0.10 / 1_000_000     # cache read
+VIEWER_FILTER_RATE = 0.60                   # SWE-Edit's measured filter rate
+
+# Section F — LLM-as-judge settings.
+# Haiku is used because this runs once per SESSION (not per turn), so cost
+# stays low, but it is still a real API call that costs money — default to
+# a small SAMPLE while testing, then raise it once you trust the results.
+JUDGE_MODEL = "anthropic/claude-haiku-4-5"   # confirmed working via LiteLLM
+JUDGE_SAMPLE = None
+LITELLM_BASE_URL = "https://litellm.labs.jb.gg"   # confirmed working base URL
+
+
+# ======================================================================
+# Section A — shared setup
+# ======================================================================
+
+def load_tables():
+    """Load the two tables we use. Cached locally after first download."""
+    sessions = load_dataset(REPO, "sessions", split="train")
+    logs = load_dataset(REPO, "session_logs", split="train")
+    return sessions, logs
+
+
+def is_long(session):
+    """A 'long' session: has token data, >30 turns, and is Claude Code.
+
+    NOTE (only Claude Code): the parsing below (message.content shape,
+    tool_use/tool_result blocks, the usage field) matches Claude Code's
+    transcript format specifically. Verified by sampling real transcripts
+    from every agent in the dataset:
+      - Codex and Copilot CLI use completely different event schemas (not
+        assistant/user/tool_use at all).
+      - Cursor's events are missing their "type" field entirely.
+      - OpenCode and Gemini CLI mostly fail to parse as JSON in this
+        format: 7 of 10 sampled Gemini CLI sessions threw a JSON error;
+        the one that looked Claude-Code-shaped was not representative.
+    So including these agents would silently misread most of their
+    transcripts, not just skip them. Kept as Claude-Code-only — confirmed,
+    not assumed.
+    """
+    return (session["input_tokens"]
+            and session["turn_count"] and session["turn_count"] > LONG_SESSION_MIN_TURNS
+            and session["agent"] == "Claude Code")
+
+
+def long_session_ids(sessions):
+    return [session["session_id"] for session in sessions if is_long(session)]
+
+
+def path_map(logs):
+    return {log["session_id"]: log["transcript_path"] for log in logs}
+
+
+def read_transcript(session_id, paths):
+    """Download (cached) and parse one transcript into a list of events."""
+    local_path = hf_hub_download(REPO, paths[session_id], repo_type="dataset")
+    events = []
+    with open(local_path) as f:
+        for line in f:
+            try:
+                events.append(json.loads(line))
+            except Exception:
+                continue          # skip malformed lines — rare, safe to ignore
+    return events
+
+
+# Tool categorisation, token estimation, is_read_only_bash_command,
+# is_exploration — now imported from session_core (shared with the local CLI).
+
+
+# ======================================================================
+# Section B — Step 1 + 2: count long sessions, exploration vs editing
+# ======================================================================
+
+def step_1_2(sessions):
+    print("\n" + "=" * 60)
+    print("STEP 1+2 — long sessions, exploration vs editing")
+    print("=" * 60)
+
+    longs = [session for session in sessions if is_long(session)]
+    print("long Claude Code sessions (>30 turns):", len(longs))
+
+    total_research = total_action = usable = 0
+    per_session = []
+    for session in longs:
+        if not session["research_count"] or not session["action_count"]:
+            continue
+        total_research += session["research_count"]
+        total_action += session["action_count"]
+        usable += 1
+        total = session["research_count"] + session["action_count"]
+        per_session.append(session["research_count"] / total)
+
+    both = total_research + total_action
+    print("sessions with both counts:", usable)
+    print(f"  exploration (research): {total_research:,.0f}  ({100*total_research/both:.0f}%)")
+    print(f"  editing (action):       {total_action:,.0f}  ({100*total_action/both:.0f}%)")
+    print(f"  avg exploration share per session: {100*sum(per_session)/len(per_session):.0f}%")
+
+
+# ======================================================================
+# Section B2 — raw tool-name counts (not categorized), per tool and total
+# ======================================================================
+
+def step_tool_name_counts(long_ids, paths):
+    """
+    Prints how many times each individual tool was called (Read, Edit,
+    Bash, Grep, TodoWrite, ...) across all long sessions, most common
+    first, plus the grand total. This is the raw count BEFORE any
+    exploration/editing/execution categorization — useful for spotting
+    tools the categorizer doesn't know about yet.
+    """
+    print("\n" + "=" * 60)
+    print("STEP (tool names) — raw tool call counts, per tool and total")
+    print("=" * 60)
+
+    tool_counts = Counter()
+    n_ok = n_skipped = 0
+    for session_id in long_ids:
+        try:
+            for event in read_transcript(session_id, paths):
+                if event.get("type") != "assistant":
+                    continue
+                for block in event["message"].get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        tool_counts[block.get("name", "unknown")] += 1
+            n_ok += 1
+        except Exception:
+            n_skipped += 1
+
+    total = sum(tool_counts.values())
+    print("sessions read:", n_ok, "| skipped:", n_skipped)
+    print(f"\n{'tool name':30s} {'count':>10s}")
+    for name, count in tool_counts.most_common():
+        print(f"{name:30s} {count:>10,}")
+    print(f"{'-'*30} {'-'*10}")
+    print(f"{'TOTAL':30s} {total:>10,}")
+
+
+# ======================================================================
+# Section C — Step 3: tool categories across all long sessions
+# ======================================================================
+
+def step_3_categories(long_ids, paths):
+    print("\n" + "=" * 60)
+    print("STEP 3 — tool categories (call counts)")
+    print("=" * 60)
+
+    cat_counts = Counter()
+    n_ok = n_skipped = 0
+    for session_id in long_ids:
+        try:
+            for event in read_transcript(session_id, paths):
+                if event.get("type") != "assistant":
+                    continue
+                for block in event["message"].get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        cat = categorize(block.get("name", ""), block.get("input", {}))
+                        cat_counts[cat] += 1
+            n_ok += 1
+        except Exception:
+            n_skipped += 1
+
+    total = sum(cat_counts.values()) or 1
+    print("sessions read:", n_ok, "| skipped:", n_skipped, "| total tool calls:", f"{total:,}")
+    for cat in ["exploration", "editing", "execution", "coordination"]:
+        count = cat_counts[cat]
+        print(f"  {cat:14s} {count:>8,}  ({100*count/total:.0f}%)")
+
+
+# ======================================================================
+# Section D — Step 4: token weight per category
+# ======================================================================
+
+def step_4_tokens(long_ids, paths):
+    print("\n" + "=" * 60)
+    print("STEP 4 — token weight per category")
+    print("=" * 60)
+
+    cat_calls = Counter()
+    cat_tokens = Counter()
+    matched = unmatched = n_ok = n_skipped = 0
+
+    for session_id in long_ids:
+        try:
+            id_to_cat = {}
+            for event in read_transcript(session_id, paths):
+                message = event.get("message", {})
+                content = message.get("content") if isinstance(message, dict) else None
+                if event.get("type") == "assistant" and isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            cat = categorize(block.get("name", ""), block.get("input", {}))
+                            id_to_cat[block.get("id")] = cat
+                            cat_calls[cat] += 1
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            tool_use_id = block.get("tool_use_id")
+                            if tool_use_id in id_to_cat:
+                                cat = id_to_cat[tool_use_id]; matched += 1
+                            else:
+                                cat = "coordination"; unmatched += 1
+                            cat_tokens[cat] += estimate_tokens(block.get("content"))
+            n_ok += 1
+        except Exception:
+            n_skipped += 1
+
+    print("sessions read:", n_ok, "| skipped:", n_skipped)
+    print(f"results matched: {matched:,} | unmatched: {unmatched:,}")
+    tot_calls = sum(cat_calls.values()) or 1
+    tot_tokens = sum(cat_tokens.values()) or 1
+    print(f"\n{'category':14s} {'calls':>10s} {'call%':>7s} {'tokens(M)':>11s} {'token%':>8s}")
+    for cat in ["exploration", "editing", "execution", "coordination"]:
+        count = cat_calls[cat]; tokens = cat_tokens[cat]
+        print(f"{cat:14s} {count:>10,} {100*count/tot_calls:>6.0f}% "
+              f"{tokens/1e6:>10.1f}M {100*tokens/tot_tokens:>7.0f}%")
+
+
+# ======================================================================
+# Section E — Step 5: exploration cost + Viewer-style saving
+# ======================================================================
+
+def step_5_savings(long_ids, paths, filter_rate=VIEWER_FILTER_RATE):
+    print("\n" + "=" * 60)
+    print("STEP 5 — exploration cost & Viewer-style saving")
+    print("=" * 60)
+
+    total_expl_cost = total_all_cost = 0.0
+    n_ok = n_skipped = 0
+    for session_id in long_ids:
+        try:
+            events = read_transcript(session_id, paths)
+            total_turns = sum(1 for event in events if event.get("type") == "assistant")
+            if total_turns == 0:
+                continue
+            id_to_call = {}     # tool_use id -> (name, input, turn_number)
+            turn_no = 0
+            for event in events:
+                message = event.get("message", {})
+                content = message.get("content") if isinstance(message, dict) else None
+                if event.get("type") == "assistant":
+                    turn_no += 1
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_use":
+                                id_to_call[block.get("id")] = (
+                                    block.get("name", ""), block.get("input", {}), turn_no
+                                )
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            name, tool_input, turn = id_to_call.get(
+                                block.get("tool_use_id"), (None, None, turn_no)
+                            )
+                            result_tokens = estimate_tokens(block.get("content"))
+                            remaining = max(total_turns - turn, 0)
+                            life_cost = result_tokens * (P_WRITE + remaining * P_READ)
+                            total_all_cost += life_cost
+                            if name and is_exploration(name, tool_input):
+                                total_expl_cost += life_cost
+            n_ok += 1
+        except Exception:
+            n_skipped += 1
+
+    saving = total_expl_cost * filter_rate
+    print("sessions read:", n_ok, "| skipped:", n_skipped)
+    print(f"lifetime cost of ALL tool-result tokens:  ${total_all_cost:,.0f}")
+    print(f"lifetime cost of EXPLORATION tokens:      ${total_expl_cost:,.0f}"
+          f"  ({100*total_expl_cost/total_all_cost:.0f}% of tool-result cost)")
+    print(f"estimated Viewer saving ({int(filter_rate*100)}% of expl): ${saving:,.0f}")
+
+
+# ======================================================================
+# Section F — LLM-as-judge task-switch detection (NO dollar savings)
+# ======================================================================
+#
+# Earlier heuristics (word overlap, file overlap, time gaps) all failed or
+# were rejected, because none of them understand MEANING — they can't tell
+# "one big task spanning many files/words" apart from "a real new task."
+# An LLM can actually read the conversation and judge intent.
+#
+# Cost control: this makes ONE real API call per session (on the ordered
+# list of user prompts), not one call per turn-pair — much cheaper than
+# judging every point in every session. Still, it is a real, billed API
+# call, so JUDGE_SAMPLE defaults to a small number for testing.
+#
+# This section deliberately does NOT calculate any dollar savings — a
+# separate math model for that is coming.
+
+# user_prompts_with_turns — imported from session_core.
+
+
+def judge_session(client, prompt_texts, model=JUDGE_MODEL):
+    """Ask the LLM to judge one session's user prompts. Returns a dict or None."""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=200,
+            temperature=0,      # reduce run-to-run randomness in the judgment
+            messages=[{"role": "user", "content": build_judge_prompt(prompt_texts)}],
+        )
+        text = response.choices[0].message.content.strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        return json.loads(text)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def section_f_llm_judge(long_ids, paths, sample=JUDGE_SAMPLE, verbose=True):
+    print("\n" + "=" * 60)
+    print("SECTION F — LLM-as-judge task-switch detection")
+    print("=" * 60)
+    print(f"(testing on a sample of {sample} sessions — raise `sample` once trusted)")
+
+    client = OpenAI(base_url=LITELLM_BASE_URL)   # reads OPENAI_API_KEY from the environment
+
+    ids = long_ids if sample is None else long_ids[:sample]
+    n_ok = n_skipped = n_judged = n_switch = 0
+    switch_positions = []
+
+    for session_id in ids:
+        try:
+            events = read_transcript(session_id, paths)
+            prompts, total_turns = user_prompts_with_turns(events)
+            if len(prompts) < 4 or total_turns == 0:
+                continue
+            n_ok += 1
+
+            result = judge_session(client, [text for _, text in prompts])
+            if not result or "error" in result:
+                n_skipped += 1
+                continue
+            n_judged += 1
+
+            if result.get("has_switch"):
+                n_switch += 1
+                switch_num = result.get("switch_message_number")
+                if isinstance(switch_num, int) and 1 <= switch_num <= len(prompts):
+                    switch_turn = prompts[switch_num - 1][0]
+                    switch_positions.append(min(switch_turn / total_turns, 1.0))
+                if verbose:
+                    print(f"  [{session_id}] switch at msg {switch_num}: {result.get('reason')}")
+        except Exception:
+            n_skipped += 1
+
+    print(f"\nsessions with enough prompts to judge: {n_ok} | skipped (API/parse errors): {n_skipped}")
+    print(f"sessions successfully judged: {n_judged}")
+    if n_judged == 0:
+        print("no successful judgments — check ANTHROPIC_API_KEY and the `anthropic` package")
+        return
+
+    pct = 100 * n_switch / n_judged
+    print(f"sessions with a detected task switch: {n_switch}  ({pct:.0f}%)")
+    if switch_positions:
+        avg_pos = 100 * sum(switch_positions) / len(switch_positions)
+        buckets = [0, 0, 0, 0]
+        for frac in switch_positions:
+            buckets[min(int(frac * 4), 3)] += 1
+        print(f"  average switch position: {avg_pos:.0f}% of the way through the session")
+        print("  distribution (0-25/25-50/50-75/75-100):", buckets)
+    print("\nNOTE: no dollar savings are calculated here — that comes from a")
+    print("separate math model. This section only reports whether/where a real")
+    print("task switch was found.")
+
+
+# ======================================================================
+# Section G — Sequential analysis: detect missed plan-mode opportunities
+# ======================================================================
+#
+# Steps 3/4 count HOW MUCH exploration happens in total. This section
+# looks at WHEN it happens — the order of tool calls matters, because a
+# long block of pure exploration at the start of a session could have been
+# run in "plan mode" (a cheaper model doing the reading), while scattered
+# exploration mixed throughout cannot be cleanly separated.
+#
+# Three patterns to detect (from mentor feedback):
+#
+#   Pattern A — "front-loaded exploration": a long exploration phase at the
+#   START, followed by a shift to editing/execution. The exploration phase
+#   is a missed plan-mode opportunity — it could have been offloaded.
+#
+#   Pattern B — "mixed throughout": exploration and editing/execution are
+#   interleaved with no clean separation. Cannot be split into plan mode
+#   without breaking the workflow.
+#
+#   Pattern C — "mid-session exploration burst": a new user prompt triggers
+#   a long exploration phase in the MIDDLE of the session, after editing
+#   has already started. A candidate for a sub-agent (a cheaper reader
+#   invoked mid-session) rather than a full session split.
+#
+# This section does NOT calculate dollar savings — a separate math model
+# will use the phase data for that. It only detects and reports the
+# patterns and their sizes (call counts, token estimates).
+
+# extract_tool_sequence, detect_phases, classify_session_pattern and the
+# phase-detection constants (MIN_PHASE_LENGTH, EXPLORATION_DOMINANCE) are now
+# imported from session_core (shared with the local CLI).
+
+
+def section_g_sequential(long_ids, paths):
+    print("\n" + "=" * 60)
+    print("SECTION G — Sequential analysis: missed plan-mode opportunities")
+    print("=" * 60)
+
+    n_ok = n_skipped = 0
+    pattern_counts = Counter()       # A / B / C / none
+    pattern_a_sessions = []          # details for Pattern A sessions
+    pattern_c_sessions = []          # details for Pattern C sessions
+    all_expl_phase_lengths = []      # length of every exploration phase found
+    all_expl_phase_tokens = []       # tokens of every exploration phase found
+
+    for session_id in long_ids:
+        try:
+            events = read_transcript(session_id, paths)
+            sequence, total_turns = extract_tool_sequence(events)
+            if len(sequence) < 10:
+                continue
+            n_ok += 1
+
+            phases = detect_phases(sequence)
+            pattern, expl_phases = classify_session_pattern(phases, sequence)
+            pattern_counts[pattern] += 1
+
+            for phase in expl_phases:
+                all_expl_phase_lengths.append(phase["length"])
+                all_expl_phase_tokens.append(phase["total_tokens"])
+
+            if pattern == "A":
+                first_expl = expl_phases[0]
+                pattern_a_sessions.append({
+                    "session_id": session_id,
+                    "expl_calls": first_expl["length"],
+                    "expl_tokens": first_expl["total_tokens"],
+                    "total_calls": len(sequence),
+                    "position_pct": 100 * first_expl["start_idx"] / len(sequence),
+                })
+            elif pattern == "C":
+                for phase in expl_phases:
+                    pattern_c_sessions.append({
+                        "session_id": session_id,
+                        "expl_calls": phase["length"],
+                        "expl_tokens": phase["total_tokens"],
+                        "total_calls": len(sequence),
+                        "position_pct": 100 * phase["start_idx"] / len(sequence),
+                    })
+
+        except Exception:
+            n_skipped += 1
+
+    print("sessions analysed:", n_ok, "| skipped:", n_skipped)
+    total_classified = sum(pattern_counts.values())
+
+    print(f"\nPattern classification (min phase length = {MIN_PHASE_LENGTH} calls):")
+    for pattern, label in [
+        ("A", "front-loaded exploration → editing (plan-mode opportunity)"),
+        ("C", "mid-session exploration burst (sub-agent opportunity)"),
+        ("B", "mixed throughout (not cleanly splittable)"),
+        ("none", "no significant exploration phase found"),
+    ]:
+        count = pattern_counts[pattern]
+        pct = 100 * count / total_classified if total_classified else 0
+        print(f"  Pattern {pattern:4s}: {count:>5,}  ({pct:>4.0f}%)  — {label}")
+
+    if pattern_a_sessions:
+        avg_calls = sum(s["expl_calls"] for s in pattern_a_sessions) / len(pattern_a_sessions)
+        avg_tokens = sum(s["expl_tokens"] for s in pattern_a_sessions) / len(pattern_a_sessions)
+        print(f"\nPattern A detail ({len(pattern_a_sessions)} sessions):")
+        print(f"  avg exploration phase length: {avg_calls:.0f} calls")
+        print(f"  avg exploration phase tokens: {avg_tokens:,.0f} (estimated)")
+        print("  these are the 'missed plan-mode' opportunities — the initial reading")
+        print("  phase could have been done by a cheaper model before the main agent")
+        print("  started editing.")
+
+    if pattern_c_sessions:
+        avg_calls = sum(s["expl_calls"] for s in pattern_c_sessions) / len(pattern_c_sessions)
+        avg_tokens = sum(s["expl_tokens"] for s in pattern_c_sessions) / len(pattern_c_sessions)
+        print(f"\nPattern C detail ({len(pattern_c_sessions)} mid-session exploration bursts):")
+        print(f"  avg burst length: {avg_calls:.0f} calls")
+        print(f"  avg burst tokens: {avg_tokens:,.0f} (estimated)")
+        print("  these are candidates for a sub-agent: a cheaper reader could handle")
+        print("  the exploration burst mid-session instead of the main model.")
+
+    if all_expl_phase_lengths:
+        print(f"\nAll exploration phases across all sessions:")
+        print(f"  total phases found: {len(all_expl_phase_lengths)}")
+        print(f"  avg length: {sum(all_expl_phase_lengths)/len(all_expl_phase_lengths):.0f} calls")
+        print(f"  avg tokens: {sum(all_expl_phase_tokens)/len(all_expl_phase_tokens):,.0f} (estimated)")
+
+    print("\nNOTE: no dollar savings calculated here — a separate math model will")
+    print("use the phase data (call counts, token estimates, positions) for that.")
+    print("This section only detects and classifies the structural patterns.")
+
+
+# ======================================================================
+# Section H — Apply the chunk-split math model to F and G split points
+# ======================================================================
+#
+# This is where the detections become dollar/token savings, using the
+# external math model in chunk_split_model.py (imported as `csm`). That
+# module prices a "split a session at a boundary" scenario from a
+# session's real token buckets. We feed it TWO kinds of semantic split:
+#
+#   - Section F style: split at the LLM-detected task-switch position
+#     (2 chunks: before / after the switch).
+#   - Section G style: split at the end of the initial exploration phase
+#     (2 chunks: the plan-mode reading phase / the rest).
+#
+# Both reduce to "one semantic split -> 2 chunk heights" which is exactly
+# the interface the math model exposes. We report the aggregate saving in
+# tokens and dollars for each.
+#
+# NOTE: the math model assumes context grows as a roughly linear ramp and
+# derives the peak from cache-read + call count. Sessions that don't fit
+# that shape (very little cache-read) are skipped rather than forced.
+
+# session_token_buckets and saving_for_split (which prices a single semantic
+# split via chunk_split_model) are now imported from session_core, along with
+# SUMMARY_ALPHA — shared with the local CLI.
+
+
+def section_h_apply_math_model(long_ids, paths, judge_sample=JUDGE_SAMPLE):
+    print("\n" + "=" * 60)
+    print("SECTION H — dollar/token savings from splitting (uses math model)")
+    print("=" * 60)
+
+    client = OpenAI(base_url=LITELLM_BASE_URL)
+
+    # accumulators for the two split strategies
+    f_as_is = f_split = f_tokens = 0.0
+    f_count = 0
+    g_as_is = g_split = g_tokens = 0.0
+    g_count = 0
+    n_ok = n_skipped = 0
+
+    ids = long_ids if judge_sample is None else long_ids[:judge_sample]
+
+    for session_id in ids:
+        try:
+            events = read_transcript(session_id, paths)
+            buckets = session_token_buckets(events)
+            _, _, _, cache_read_tok, api_calls = buckets
+            if cache_read_tok <= 0 or api_calls < 2:
+                continue
+            n_ok += 1
+
+            # ----- Section F style: split at LLM-detected task switch -----
+            prompts, total_turns = user_prompts_with_turns(events)
+            if len(prompts) >= 4 and total_turns > 0:
+                result = judge_session(client, [text for _, text in prompts])
+                if result and "error" not in result and result.get("has_switch"):
+                    switch_num = result.get("switch_message_number")
+                    if isinstance(switch_num, int) and 1 <= switch_num <= len(prompts):
+                        switch_turn = prompts[switch_num - 1][0]
+                        frac = switch_turn / total_turns
+                        out = saving_for_split(buckets, frac)
+                        if out:
+                            f_as_is += out["as_is_cost"]
+                            f_split += out["split_cost"]
+                            f_tokens += out["token_saving"]
+                            f_count += 1
+
+            # ----- Section G style: split at end of initial exploration -----
+            sequence, seq_turns = extract_tool_sequence(events)
+            if len(sequence) >= 10 and seq_turns > 0:
+                phases = detect_phases(sequence)
+                pattern, expl_phases = classify_session_pattern(phases, sequence)
+                if pattern == "A" and expl_phases:
+                    # split where the initial exploration phase ends
+                    end_turn = expl_phases[0]["end_turn"]
+                    frac = end_turn / seq_turns
+                    out = saving_for_split(buckets, frac)
+                    if out:
+                        g_as_is += out["as_is_cost"]
+                        g_split += out["split_cost"]
+                        g_tokens += out["token_saving"]
+                        g_count += 1
+
+        except Exception:
+            n_skipped += 1
+
+    print("sessions processed:", n_ok, "| skipped:", n_skipped)
+    print(f"(sample = {judge_sample} sessions; Section F uses real API calls)")
+
+    def report(label, count, as_is, split, tokens):
+        print(f"\n--- {label} ---")
+        print(f"sessions with a usable split: {count}")
+        if not count:
+            return
+        saving = as_is - split
+        pct = 100 * saving / as_is if as_is else 0
+        print(f"  as-is cost:        ${as_is:,.2f}")
+        print(f"  cost after split:  ${split:,.2f}")
+        print(f"  dollar saving:     ${saving:,.2f}  ({pct:.0f}%)")
+        print(f"  cache-read tokens saved: {tokens/1e6:,.1f}M")
+
+    report("Section F split (at task switch)", f_count, f_as_is, f_split, f_tokens)
+    report("Section G split (initial exploration, plan-mode)", g_count, g_as_is, g_split, g_tokens)
+
+
+# ======================================================================
+# main
+# ======================================================================
+
+def main():
+    sessions, logs = load_tables()
+    long_ids = long_session_ids(sessions)
+    paths = path_map(logs)
+
+    step_1_2(sessions)
+    step_tool_name_counts(long_ids, paths)
+    step_3_categories(long_ids, paths)
+    step_4_tokens(long_ids, paths)
+    step_5_savings(long_ids, paths)
+
+    # LLM-as-judge task-switch detection
+    section_f_llm_judge(long_ids, paths)
+
+    # Sequential analysis — detect missed plan-mode opportunities
+    section_g_sequential(long_ids, paths)
+
+    # Apply the chunk-split math model to F and G split points -> $ savings
+    section_h_apply_math_model(long_ids, paths)
+
+
+if __name__ == "__main__":
+    main()
