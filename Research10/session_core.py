@@ -116,10 +116,22 @@ def user_prompts_with_turns(events):
     return prompts, turn_no
 
 
-def build_judge_prompt(prompt_texts):
+def build_judge_prompt(prompt_texts, with_summary=False):
     """Build the LLM-as-judge prompt asking whether the user switches to a
-    clearly unrelated task at any point (pure string; no API call)."""
+    clearly unrelated task at any point (pure string; no API call).
+
+    If `with_summary` is set, the same call is also asked for a one-sentence
+    plain-English description of the session's task — so callers that already
+    run the judge get the summary for free (no extra API call)."""
     numbered = "\n".join(f"{i+1}. {text}" for i, text in enumerate(prompt_texts))
+    fields = (
+        '{"has_switch": true or false, "switch_message_number": <number of the '
+        'first message that starts the new task, or null>, "reason": '
+        '"<one short sentence>"')
+    if with_summary:
+        fields += (', "summary": "<one short, concrete sentence naming the '
+                   'feature/bug/goal the user worked on in this session>"')
+    fields += "}"
     return (
         "Here are the user's messages from one coding session, in order:\n\n"
         f"{numbered}\n\n"
@@ -136,9 +148,21 @@ def build_judge_prompt(prompt_texts):
         "unrelated — e.g. the user was fixing one bug and now asks about a "
         "completely different feature or problem area.\n\n"
         "Answer with ONLY a JSON object, no other text:\n"
-        '{"has_switch": true or false, "switch_message_number": <number of the '
-        'first message that starts the new task, or null>, "reason": '
-        '"<one short sentence>"}'
+        + fields
+    )
+
+
+def build_summary_prompt(prompt_texts):
+    """Build a prompt asking ONLY for a one-sentence task summary — used for
+    sessions too short for the task-switch judge (pure string; no API call)."""
+    numbered = "\n".join(f"{i+1}. {text}" for i, text in enumerate(prompt_texts))
+    return (
+        "Here are the user's messages from one coding session, in order:\n\n"
+        f"{numbered}\n\n"
+        "In ONE short, concrete sentence, describe what task the user worked on "
+        "in this session (name the feature/bug/goal, not just 'coding').\n\n"
+        "Answer with ONLY a JSON object, no other text:\n"
+        '{"summary": "<one sentence>"}'
     )
 
 

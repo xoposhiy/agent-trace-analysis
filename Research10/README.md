@@ -6,8 +6,9 @@ would have saved. It runs entirely on your machine against the transcripts Claud
 already writes; nothing is uploaded.
 
 It works for **anyone's** Claude Code traces, not one specific setup: paths resolve
-per-user at runtime, the default analysis needs no API key and no network, and the
-optional LLM feature works against any provider you configure.
+per-user at runtime, and the LLM features (task summaries + task-switch detection) work
+against any OpenAI-compatible provider **you** configure with your own key. With no key
+set, it still runs fully offline as a structural-only analysis.
 
 ## What it does
 
@@ -21,6 +22,11 @@ For every session under `~/.claude/projects/**/*.jsonl` it:
 3. **Suggests** the split only if the modelled saving clears both a percentage floor
    and a dollar floor — so tiny sessions never nag you.
 
+When an LLM endpoint is reachable (the default — see [Enabling LLM summaries](#enabling-llm-summaries)),
+it also (4) asks a model whether you genuinely **switched to an unrelated task**
+mid-session and prices a split there too, and (5) writes a one-line **task summary** of
+what each considered session was about — because a bare session ID tells you nothing.
+
 Output is a console summary plus a Markdown report (`split_report.md`).
 
 ## Install
@@ -28,11 +34,11 @@ Output is a console summary plus a Markdown report (`split_report.md`).
 Requires Python 3.8+. Installing in a virtual environment is recommended.
 
 ```bash
-# from this directory
-pip install .
-
-# with the optional LLM task-switch judge
+# from this directory — includes the LLM extra (openai) so summaries work out of the box
 pip install ".[llm]"
+
+# structural-only, no LLM dependency at all
+pip install .
 ```
 
 This puts a `split-advisor` command on your PATH. (You can also just run it in place
@@ -42,11 +48,16 @@ with `python split_advisor.py` — no install needed.)
 
 ```bash
 split-advisor                       # scan all sessions, write ./split_report.md
+split-advisor --no-llm              # fully offline, structural-only (session IDs, no summaries)
 split-advisor --summary-only        # console summary only, no file
 split-advisor --project my-repo     # only sessions whose project dir matches
 split-advisor --min-pct 8 --min-dollars 0.25   # loosen the suggestion thresholds
 split-advisor --out ~/report.md     # choose where the report is written
 ```
+
+By default the tool uses an LLM (for summaries + task-switch detection) if one is
+reachable; set your key first (see below). If no endpoint is configured it prints a
+short hint and falls back to the offline structural analysis automatically.
 
 ### Options
 
@@ -59,27 +70,44 @@ split-advisor --out ~/report.md     # choose where the report is written
 | `--alpha` | `0.10` | Carried-summary size as a fraction of the first chunk (the "summary parameter"). |
 | `--out` | `./split_report.md` | Markdown report path. |
 | `--summary-only` | off | Console only; don't write the report. |
-| `--llm` | off | Also use the LLM task-switch judge (see below). |
+| `--no-llm` | off | Disable all LLM use — structural heuristics only, fully offline. |
 | `--llm-base-url` | `$OPENAI_BASE_URL` or SDK default | OpenAI-compatible endpoint. |
 | `--llm-model` | `$SPLIT_ADVISOR_MODEL` or `gpt-4o-mini` | Model name — set it to match your endpoint. |
 
-## Optional: the LLM task-switch judge
+## Enabling LLM summaries
 
-The default analysis is heuristic and fully offline. Adding `--llm` also asks a model
-whether you genuinely switched to an unrelated task mid-session, and considers a split
-there too. It uses the OpenAI-compatible chat API, so it works against **any** provider:
+The LLM features (task summaries + task-switch detection) are **on by default** — but
+they need an API key you provide. Nothing is baked in: you point the tool at your own
+OpenAI-compatible endpoint, so it works against any provider and spends only your quota.
+
+**If you have an OpenAI key**, that's the whole setup (the default model is `gpt-4o-mini`):
 
 ```bash
 export OPENAI_API_KEY=sk-...
-# OpenAI directly:
-split-advisor --llm --llm-model gpt-4o-mini
-# a Claude-compatible proxy / OpenRouter:
-export OPENAI_BASE_URL=https://your-proxy.example.com
-split-advisor --llm --llm-model anthropic/claude-haiku-4-5
+split-advisor                       # summaries + task-switch on by default
 ```
 
-If the LLM client can't be created or a call fails, the tool logs it and continues
-with heuristic-only detection.
+**For any other OpenAI-compatible provider** (a Claude/LiteLLM proxy, OpenRouter, a
+local server, …), also set the endpoint and a model name it exposes:
+
+```bash
+export OPENAI_API_KEY=sk-...
+export OPENAI_BASE_URL=https://your-endpoint/v1
+export SPLIT_ADVISOR_MODEL=anthropic/claude-haiku-4-5
+split-advisor
+```
+
+Tip: put those `export` lines in your shell profile (`~/.zshrc` / `~/.bashrc`) so every
+run picks them up. To confirm a run used the LLM, its first line reads
+*"…with LLM task summaries + task-switch judge…"*; if the key is missing you'll instead
+see a short hint and *"…structural heuristics only; no LLM…"*.
+
+**No key / don't want to use an LLM?** Run `split-advisor --no-llm` (or just leave the
+key unset). You still get the full structural analysis and pricing — only the summaries
+and task-switch options are omitted, and sessions are shown by ID.
+
+If the LLM client can't be created or a call fails, the tool prints the reason and
+continues with the offline structural analysis rather than erroring out.
 
 ## Notes
 

@@ -2,7 +2,9 @@
 
 A local CLI that scans **your own** Claude Code sessions and decides, per session,
 whether it was worth splitting — and how much a split would have saved. Reuses the
-Research7 detectors + chunk-split pricing, pointed at local transcripts. Runs offline.
+Research7 detectors + chunk-split pricing, pointed at local transcripts. The structural
+pricing is fully offline; by default it also calls an OpenAI-compatible LLM (your own
+key) to detect task switches and label each session with a one-line summary.
 Install and usage: [`README.md`](README.md).
 
 ---
@@ -12,7 +14,11 @@ Install and usage: [`README.md`](README.md).
 Rebuild each session's tool-call sequence, detect its shape (front-loaded reading →
 plan-mode split, or a mid-session reading burst → sub-agent split), price a single
 split at that boundary, and suggest it only if the saving clears **both** a % floor and
-a $ floor. Optional `--llm` also checks for a genuine task switch.
+a $ floor.
+
+It also attaches a one-line **task summary** to every session that has a split option, so
+each **plan-mode** or **task-switch** suggestion says in plain English what the session
+was about instead of just a cryptic ID. (`--no-llm` skips the summary and runs offline.)
 
 ---
 

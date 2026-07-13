@@ -17,9 +17,11 @@ those transcripts (fully offline), and for each session:
   3. SUGGESTS a split only when the modelled saving clears BOTH a percentage floor
      and a dollar floor (so tiny sessions don't nag).
 
-Optionally (`--llm`) it also asks an LLM-as-judge whether the user genuinely
-switched tasks mid-session, and considers a split at that switch too — keeping
-whichever candidate saves more.
+Whenever an LLM endpoint is reachable (the default), it ALSO asks an LLM-as-judge
+whether the user genuinely switched tasks mid-session — considering a split at that
+switch too, keeping whichever candidate saves more — and labels every considered
+split with a one-line summary of what the session was about (session IDs alone are
+meaningless). `--no-llm` turns all of that off for a fully offline structural run.
 
 All the analysis/pricing lives in `session_core.py` (shared with the dataset
 script `main.py`); this file only adds local discovery, gating, and reporting.
@@ -30,10 +32,11 @@ USAGE
     python split_advisor.py --summary-only      # console summary only, no file
     python split_advisor.py --project agent-trace   # only sessions of one project
     python split_advisor.py --min-pct 8 --min-dollars 0.25
-    python split_advisor.py --llm               # also use the LLM task-switch judge
+    python split_advisor.py --no-llm            # fully offline, structural heuristics only
 
-The `--llm` path calls Claude through the OpenAI-compatible LiteLLM proxy; set your
-key as OPENAI_API_KEY first. The default (heuristic) path needs no key and no network.
+By default the summaries and the task-switch judge call an OpenAI-compatible endpoint
+(e.g. a LiteLLM proxy); set OPENAI_API_KEY (and --llm-base-url / --llm-model) first. If
+no endpoint is reachable the tool degrades to a structural-only report instead of failing.
 """
 import argparse
 import glob
@@ -152,6 +155,7 @@ class SessionAnalysis:
     candidates: list = field(default_factory=list)
     best: Optional[Candidate] = None
     modelled: bool = True       # False if the session doesn't fit the cost model
+    task_summary: str = ""      # one-line LLM summary of the task (only with --llm)
 
 
 def _plan_mode_candidate(buckets, seq_turns, expl_phases, alpha):
@@ -186,12 +190,10 @@ def _subagent_candidate(buckets, seq_turns, expl_phases, alpha):
     )
 
 
-def _task_switch_candidate(buckets, events, seq_turns, alpha, client, model):
-    """--llm only: split at an LLM-detected genuine task switch."""
-    prompts, total_turns = core.user_prompts_with_turns(events)
-    if len(prompts) < 4 or total_turns <= 0 or client is None:
-        return None
-    result = judge_task_switch(client, [text for _, text in prompts], model=model)
+def _task_switch_candidate(result, buckets, prompts, total_turns, alpha):
+    """--llm only: build a split Candidate from a judge result, or None.
+    `result` is the parsed judge dict (already fetched by the caller so the
+    same LLM call can also supply the session summary)."""
     if not result or "error" in result or not result.get("has_switch"):
         return None
     switch_num = result.get("switch_message_number")
@@ -213,7 +215,11 @@ def _task_switch_candidate(buckets, events, seq_turns, alpha, client, model):
 
 def analyze_session(session_id, path, project, alpha=core.SUMMARY_ALPHA,
                     client=None, model=DEFAULT_JUDGE_MODEL):
-    """Analyse one session end-to-end. Returns a SessionAnalysis."""
+    """Analyse one session end-to-end. Returns a SessionAnalysis.
+
+    When `client` is set (an LLM endpoint is reachable) the analysis also runs
+    the task-switch judge and writes a one-line task summary for any session
+    that has a split option. With no client it is a purely structural analysis."""
     events = read_local_transcript(path)
     buckets = core.session_token_buckets(events)
     input_tok, output_tok, cache_write_tok, cache_read_tok, api_calls = buckets
@@ -251,15 +257,40 @@ def analyze_session(session_id, path, project, alpha=core.SUMMARY_ALPHA,
         if c:
             candidates.append(c)
 
+    judge_result = None
+    prompts = []
     if client is not None:
-        c = _task_switch_candidate(buckets, events, seq_turns, alpha, client, model)
-        if c:
-            candidates.append(c)
+        prompts, total_turns = core.user_prompts_with_turns(events)
+        # The judge runs on sessions with enough prompts; ask it for the summary
+        # in the SAME call so those sessions cost no extra request.
+        if len(prompts) >= 4 and total_turns > 0:
+            judge_result = judge_task_switch(client, [t for _, t in prompts],
+                                             model=model, with_summary=True)
+            c = _task_switch_candidate(judge_result, buckets, prompts,
+                                       total_turns, alpha)
+            if c:
+                candidates.append(c)
 
     analysis.candidates = candidates
     if candidates:
         analysis.best = max(candidates, key=lambda c: c.dollars)
+
+    # Chosen scope: only summarise sessions that produced a split option.
+    if client is not None and candidates:
+        analysis.task_summary = _session_summary(client, model, prompts, judge_result)
     return analysis
+
+
+def _session_summary(client, model, prompts, judge_result):
+    """The session's one-line task summary: reuse the judge call's summary if we
+    have one, else make a small dedicated summary call. Never raises."""
+    if judge_result and "error" not in judge_result:
+        summary = (judge_result.get("summary") or "").strip()
+        if summary:
+            return summary
+    if prompts:
+        return summarize_session(client, [t for _, t in prompts], model=model)
+    return ""
 
 
 # ======================================================================
@@ -318,20 +349,41 @@ def make_llm_client(base_url=DEFAULT_LLM_BASE_URL):
     return OpenAI(base_url=base_url) if base_url else OpenAI()
 
 
-def judge_task_switch(client, prompt_texts, model=DEFAULT_JUDGE_MODEL):
-    """One LLM call judging whether the user switches tasks. dict or {'error':...}."""
+def judge_task_switch(client, prompt_texts, model=DEFAULT_JUDGE_MODEL,
+                      with_summary=False):
+    """One LLM call judging whether the user switches tasks (optionally also
+    returning a one-line task summary). Returns a dict or {'error': ...}."""
     try:
         response = client.chat.completions.create(
             model=model,
-            max_tokens=200,
+            max_tokens=300 if with_summary else 200,
             temperature=0,
-            messages=[{"role": "user", "content": core.build_judge_prompt(prompt_texts)}],
+            messages=[{"role": "user",
+                       "content": core.build_judge_prompt(prompt_texts, with_summary)}],
         )
         text = response.choices[0].message.content.strip()
         text = text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except Exception as e:
         return {"error": str(e)}
+
+
+def summarize_session(client, prompt_texts, model=DEFAULT_JUDGE_MODEL):
+    """One LLM call returning a one-line task summary (used for sessions too
+    short for the judge). Returns the sentence, or '' on any failure."""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=120,
+            temperature=0,
+            messages=[{"role": "user",
+                       "content": core.build_summary_prompt(prompt_texts)}],
+        )
+        text = response.choices[0].message.content.strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        return (json.loads(text).get("summary") or "").strip()
+    except Exception:
+        return ""
 
 
 # ======================================================================
@@ -342,8 +394,23 @@ def _fmt_k(tokens):
     return f"{tokens/1000:.0f}k" if tokens else "—"
 
 
+def _candidate_status(analysis, cand, min_pct, min_dollars):
+    """Short status for one candidate in the 'all considered options' table.
+    Only the best candidate that clears BOTH floors is ever suggested."""
+    is_best = analysis.best is cand
+    clears = cand.pct >= min_pct and cand.dollars >= min_dollars
+    if is_best and clears:
+        if cand.source == "plan-mode" and analysis.already_plan_mode:
+            return "already plan mode"
+        return "✅ suggested"
+    if clears:
+        return "clears floor (not best)"
+    return "below floor"
+
+
 def render_report(analyses, suggestions, min_pct, min_dollars, used_llm):
-    """Build the full Markdown report string."""
+    """Build the full Markdown report string. `used_llm` = an LLM endpoint was
+    reachable, so the report has task summaries and task-switch options."""
     suggested = [s for s in suggestions if not s.informational]
     informational = [s for s in suggestions if s.informational]
     total_saving = sum(s.candidate.dollars for s in suggested)
@@ -359,7 +426,9 @@ def render_report(analyses, suggestions, min_pct, min_dollars, used_llm):
     if informational:
         lines.append(f"- Sessions that already used plan mode (no action needed): "
                      f"**{len(informational)}**")
-    lines.append(f"- Detection: heuristic{' + LLM task-switch judge' if used_llm else ' only'}")
+    detection = ("heuristic + LLM task-switch judge + task summaries" if used_llm
+                 else "heuristic only (no LLM endpoint reachable)")
+    lines.append(f"- Detection: {detection}")
     lines.append("")
 
     # ---- ranked suggestions table ----
@@ -379,6 +448,8 @@ def render_report(analyses, suggestions, min_pct, min_dollars, used_llm):
         for s in sorted(suggested, key=lambda x: x.candidate.dollars, reverse=True):
             a = s.analysis
             lines.append(f"**`{a.session_id}`** — {a.project}")
+            if a.task_summary:
+                lines.append(f"- Task: {a.task_summary}")
             lines.append(f"- {a.turns} turns, {a.tool_calls} tool calls, "
                          f"peak context ~{_fmt_k(a.peak_context)} tokens, "
                          f"as-is cost ${a.as_is_cost:.2f}")
@@ -413,6 +484,33 @@ def render_report(analyses, suggestions, min_pct, min_dollars, used_llm):
                      f"{a.pattern} | {save_str} | {mark} |")
     lines.append("")
 
+    # ---- every option considered, incl. below-floor & non-best (transparency) ----
+    lines.append("## All considered split options\n")
+    note = ("Every split point the tool priced, including options below the "
+            "suggestion floor and options that were not the best for their session. ")
+    note += ("LLM-detected task switches appear here too."
+             if used_llm else
+             "(No LLM endpoint reachable, so LLM task switches are not included.)")
+    lines.append(note + "\n")
+    # The "Task" column (LLM summary of what the session was about) appears
+    # whenever an LLM endpoint was reachable — session IDs alone say nothing.
+    task_col = " Task |" if used_llm else ""
+    task_sep = ":---|" if used_llm else ""
+    lines.append(f"| Session |{task_col} Option | Split point | Save $ | Save % | Status |")
+    lines.append(f"|---|{task_sep}:---:|---|---:|---:|:---:|")
+    any_cand = False
+    for a in sorted(analyses, key=lambda x: x.as_is_cost, reverse=True):
+        task_cell = f" {a.task_summary or '—'} |" if used_llm else ""
+        for c in sorted(a.candidates, key=lambda x: x.dollars, reverse=True):
+            any_cand = True
+            status = _candidate_status(a, c, min_pct, min_dollars)
+            lines.append(f"| `{a.session_id[:8]}` |{task_cell} {c.source} | {c.label} | "
+                         f"${c.dollars:.2f} | {c.pct:.0f}% | {status} |")
+    if not any_cand:
+        empty = f"| — |{' — |' if used_llm else ''} — | no priceable split points found in any session | — | — | — |"
+        lines.append(empty)
+    lines.append("")
+
     return "\n".join(lines)
 
 
@@ -425,6 +523,8 @@ def print_summary(analyses, suggestions, min_pct, min_dollars):
     for s in sorted(suggested, key=lambda x: x.candidate.dollars, reverse=True):
         a, c = s.analysis, s.candidate
         print(f"  • {a.session_id[:8]}  [{c.source}]  ${c.dollars:.2f} ({c.pct:.0f}%)")
+        if a.task_summary:
+            print(f"      task: {a.task_summary}")
         print(f"      {s.message}")
 
 
@@ -446,18 +546,39 @@ def build_arg_parser():
     p.add_argument("--alpha", type=float, default=core.SUMMARY_ALPHA,
                    help=f"carried-summary size as a fraction of the first chunk "
                         f"(default: {core.SUMMARY_ALPHA})")
-    p.add_argument("--llm", action="store_true",
-                   help="also use the LLM task-switch judge (needs OPENAI_API_KEY)")
+    p.add_argument("--no-llm", action="store_true",
+                   help="disable all LLM use (no task summaries, no task-switch judge); "
+                        "structural heuristics only, fully offline")
     p.add_argument("--llm-base-url", default=DEFAULT_LLM_BASE_URL,
-                   help="OpenAI-compatible endpoint for --llm (default: $OPENAI_BASE_URL, "
+                   help="OpenAI-compatible endpoint for the LLM (default: $OPENAI_BASE_URL, "
                         "else the OpenAI SDK default). Point it at your own provider.")
     p.add_argument("--llm-model", default=DEFAULT_JUDGE_MODEL,
-                   help=f"model name for --llm (default: {DEFAULT_JUDGE_MODEL})")
+                   help=f"model name for summaries + the judge (default: {DEFAULT_JUDGE_MODEL})")
     p.add_argument("--out", default=DEFAULT_OUT,
                    help=f"Markdown report path (default: {DEFAULT_OUT})")
     p.add_argument("--summary-only", action="store_true",
                    help="print the console summary only; do not write the report file")
     return p
+
+
+def _explain_no_llm(err, model):
+    """Print a friendly, actionable hint when the LLM client can't be built, so a
+    first-time user knows exactly how to turn on task summaries + task-switch
+    detection (rather than seeing a raw exception)."""
+    msg = str(err).lower()
+    missing_key = "api_key" in msg or "credential" in msg or "openai_api_key" in msg
+    print("Note: no LLM endpoint configured — running structural-only "
+          "(no task summaries, no task-switch detection).")
+    if missing_key:
+        print("  To enable them, set an API key for any OpenAI-compatible provider "
+              "and re-run:")
+        print("      export OPENAI_API_KEY=sk-...            # e.g. an OpenAI key")
+        print("  For a non-OpenAI provider, also set the endpoint and model:")
+        print("      export OPENAI_BASE_URL=https://your-endpoint/v1")
+        print(f"      export SPLIT_ADVISOR_MODEL=your-model   # default: {model}")
+    else:
+        print(f"  (endpoint error: {err})")
+    print("  Pass --no-llm to silence this and always run offline.")
 
 
 def main():
@@ -469,16 +590,21 @@ def main():
               + (f" matching '{args.project}'." if args.project else "."))
         return
 
+    # By default an LLM client is built so every suggestion carries a task
+    # summary AND task switches are detected (session IDs alone are meaningless).
+    # --no-llm skips it; if the endpoint is simply unreachable we degrade to a
+    # structural-only report rather than crashing.
     client = None
-    if args.llm:
+    if not args.no_llm:
         try:
             client = make_llm_client(args.llm_base_url)
         except Exception as e:
-            print(f"--llm requested but the LLM client could not be created ({e}).")
-            print("Continuing with heuristic-only detection.")
+            _explain_no_llm(e, args.llm_model)
 
     print(f"Analysing {len(sessions)} session(s)"
-          + (" with LLM task-switch judge…" if client else "…"))
+          + (" with LLM task summaries + task-switch judge…" if client
+             else " (structural heuristics only; no LLM)…"))
+
     analyses = []
     for session_id, path, project in sessions:
         try:
