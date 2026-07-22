@@ -115,6 +115,10 @@ def serve(host="127.0.0.1", port=8000):
     if chosen != port:
         print(f"Port {port} is in use — starting on {chosen} instead "
               f"(is a dashboard already open? use --port to pick your own).", flush=True)
+    # Pre-flight LLM check at startup, so the user sees on screen whether their key
+    # was picked up BEFORE they press Refresh — no more silent structural-only.
+    import split_advisor as sa
+    sa.print_llm_diagnostics(header="startup: LLM check")
     print(f"Claude Split Advisor dashboard → http://{host}:{chosen}", flush=True)
     print("  (all local; press Refresh in the page to analyse new sessions; Ctrl-C to stop)",
           flush=True)

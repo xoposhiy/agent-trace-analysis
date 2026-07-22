@@ -82,6 +82,15 @@ button.refresh:disabled { opacity: 0.6; cursor: default; }
 .toolbar label { color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
 .status { color: var(--text-secondary); font-size: 13px; }
 
+/* LLM diagnostics banner (set after each refresh) */
+.llm-banner {
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;
+  font-size: 13px; line-height: 1.5; border: 1px solid var(--border);
+}
+.llm-banner.ok  { color: var(--good); border-color: var(--good); background: rgba(0,131,0,0.06); }
+.llm-banner.bad { color: var(--series-8); border-color: var(--series-8); background: rgba(227,73,72,0.07); }
+.llm-banner.off { color: var(--text-secondary); background: var(--surface-1); }
+
 /* ---- stat tiles ---- */
 .tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
 .tile {
@@ -146,6 +155,27 @@ button.refresh:disabled { opacity: 0.6; cursor: default; }
 .legend .item.child { margin-left: 14px; font-size: 11px; opacity: 0.9; }
 .legend .item.child::before { content: "↳"; color: var(--muted); margin-right: 2px; }
 
+/* ---- interactive task tree (top-level task rows, expandable to sub-tasks) ---- */
+.task-tree { margin: 10px 0 4px; }
+.task-tree .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.tt-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+  font-size: 13px; color: var(--text-secondary); }
+.tt-row b { color: var(--text-primary); }
+.tt-row.tt-expandable { cursor: pointer; }
+.tt-row.tt-expandable:hover { background: var(--gridline); }
+.tt-caret { width: 10px; flex: none; color: var(--muted); font-size: 10px;
+  transition: transform 0.12s ease; }
+.tt-row.open .tt-caret { transform: rotate(90deg); }
+.tt-caret.tt-none { visibility: hidden; }
+.tt-label { color: var(--text-secondary); }
+.tt-count { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; }
+.tt-children { margin: 2px 0 6px 26px; display: flex; flex-direction: column; gap: 3px;
+  border-left: 1px solid var(--border); padding-left: 12px; }
+/* the `display:flex` above beats the UA `[hidden]{display:none}`, so restate it */
+.tt-children[hidden] { display: none; }
+.tt-child { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); }
+.tt-child b { color: var(--text-primary); }
+
 /* ---- plan-mode phase bar (reading / editing / running over turns) ---- */
 .phasebar {
   position: relative; height: 30px; border-radius: 6px; overflow: hidden;
@@ -172,14 +202,51 @@ button.refresh:disabled { opacity: 0.6; cursor: default; }
 /* the list of classified split points on each card */
 .splitpoints { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .sp-h { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
-.sp { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
+.sp { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 13px;
+  border-radius: 6px; border: 1px solid transparent; }
+.sp[data-idx] { cursor: pointer; }
+.sp[data-idx]:hover { background: var(--gridline); }
+.sp.selected { background: var(--gridline); border-color: var(--series-1); }
 .sp .badge { flex: none; }
+.sp-hint { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
 .sp-label { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-save { margin-left: auto; flex: none; color: var(--good); font-weight: 600;
   font-variant-numeric: tabular-nums; }
 
 .meta { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
 .meta .k-split { color: var(--good); font-weight: 600; }
+
+/* ---- best-split preview (the whiteboard-sketch visual) ---- */
+.best-split-h {
+  margin-top: 14px; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.best-split-h .bs-label { text-transform: none; letter-spacing: 0; color: var(--text-secondary); }
+.split-preview { position: relative; margin: 8px 0 2px; }
+/* the pieces (full bar on top, chunk bars below) are flex rows of colored slices */
+.pv-full, .pv-bar { display: flex; height: 20px; border-radius: 5px; overflow: hidden;
+  background: var(--gridline); gap: 1px; }
+.pv-full { height: 22px; position: relative; }
+/* sub-agent: outline the segment being lifted out, on the full bar */
+.pv-brace { position: absolute; top: -2px; bottom: -2px; border: 2px solid var(--series-6);
+  border-radius: 5px; pointer-events: none; }
+/* the excised segment shown offset below, as its own isolated sub-agent run */
+.pv-subrow { margin-top: 2px; }
+.pv-bar.pv-sub { outline: 1.5px dashed var(--series-6); outline-offset: 1px; }
+.pv-seg { min-width: 2px; }
+.pv-arrow-row { position: relative; height: 18px; }
+.pv-arrow { position: absolute; transform: translateX(-50%); color: var(--muted);
+  font-size: 15px; line-height: 18px; }
+.pv-chunks { display: flex; flex-direction: column; gap: 6px; }
+.pv-row { display: flex; align-items: center; gap: 3px; min-width: 40px; }
+.pv-row .pv-bar { flex: 1; }
+/* the small grey block = the summary carried into the next session */
+.pv-summary { flex: none; width: 14px; height: 20px; border-radius: 3px;
+  background: var(--muted); opacity: 0.55; }
+.pv-save { margin-top: 8px; color: var(--good); font-weight: 700;
+  font-variant-numeric: tabular-nums; font-size: 14px; }
+.pv-cap { margin-top: 3px; color: var(--muted); font-size: 12px; }
 ul.tangents { margin: 8px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
 
 .empty { color: var(--muted); text-align: center; padding: 48px 0; }

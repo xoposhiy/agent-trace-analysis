@@ -34,7 +34,11 @@ DEFAULT_CACHE_PATH = os.path.join(
 
 # Bump when the analysis logic changes (not just the transcripts), so an old cache
 # built by a previous version is discarded and everything is re-analysed once.
-CACHE_VERSION = 6
+# v7: terminology rename in split-point labels ("message" -> "user prompt",
+#     "turn" -> "agent step"), so old cached labels are regenerated on next refresh.
+# v8: sub-agent candidates now carry split_end_fraction (for the excise-and-rejoin
+#     preview), so re-analyse to populate it on existing sessions.
+CACHE_VERSION = 8
 
 
 # ----------------------------------------------------------------------
@@ -71,6 +75,7 @@ def candidate_from_dict(data):
         saving=data["saving"],
         label=data["label"],
         detail=data.get("detail", ""),
+        split_end_fraction=data.get("split_end_fraction"),
     )
 
 
@@ -165,8 +170,20 @@ def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
     cache = load_cache(cache_path)
     entries = cache["sessions"]
 
+    # Pre-flight: say up front whether the LLM will run, and if not, exactly why.
+    # This is the piece that was missing — the web path used to degrade to
+    # structural-only in total silence, so a user who supplied a key had no way to
+    # tell it was never picked up.
+    diag = None
+    if use_llm:
+        diag = sa.print_llm_diagnostics(base_url, model, header="refresh: LLM check")
+
     client = None
     client_tried = False
+    client_error = None          # why make_llm_client failed, if it did
+    judge_errors = 0             # sessions whose judge call errored this run
+    first_judge_error = None     # the first such error, verbatim (bad key/model/timeout)
+    llm_judged = 0              # sessions actually judged by the LLM this run
     analyses = []
     analyzed = reused = 0
 
@@ -195,11 +212,27 @@ def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
             client_tried = True
             try:
                 client = sa.make_llm_client(base_url)
-            except Exception:
+            except Exception as e:
                 client = None      # degrade to structural-only, like the CLI does
+                client_error = str(e)
+                # Loud, not silent: the old code swallowed this entirely.
+                print(f"  [LLM] could not build client — running structural-only: {e}",
+                      flush=True)
 
         a = sa.analyze_session(session_id, path, project, alpha=alpha,
                                client=client, model=model)
+        # Track what the judge actually did, so the end-of-run verdict can tell the
+        # user whether the LLM was really used (client present is not enough — the
+        # endpoint/model can still reject every call).
+        if client is not None:
+            if a.llm_error and first_judge_error is None:
+                first_judge_error = a.llm_error
+            if a.llm_error:
+                judge_errors += 1
+                print(f"  [LLM] judge error on {session_id[:8]}: {a.llm_error}",
+                      flush=True)
+            elif a.task_forest:
+                llm_judged += 1
         # Mark the entry as an LLM result if the client was present AND the judge
         # didn't error. Sessions too short to judge still count as "done in LLM mode"
         # (a.llm_ok stays True), so they are reused — not re-run every refresh. Only a
@@ -217,7 +250,64 @@ def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
             progress(session_id, analyzed)
 
     save_cache(cache, cache_path)
-    return analyses, {"analyzed": analyzed, "reused": reused, "total": len(sessions)}
+
+    # End-of-run verdict: was the LLM ACTUALLY used, and if not, why? This is the
+    # single line that answers "did it run with the LLM or not?".
+    #
+    # Order matters. The client is built LAZILY (only when a session actually needs
+    # analysing), so `client is None` on its own does NOT mean failure — if nothing
+    # needed re-analysing (all sessions served from cache) the client is simply never
+    # built. We check `client_tried` first so that all-cached refreshes read as a
+    # healthy "nothing to do", not a scary "no client". A genuine build failure is
+    # caught separately via `client_error`.
+    if not use_llm:
+        llm_active = False
+        llm_status = "off (structural-only requested)"
+    elif not client_tried:
+        # No new/changed session this refresh → everything came from the cache. The
+        # LLM wasn't exercised, but the cached results ARE LLM results (a structural
+        # cache entry would have forced a re-analysis), so this is fine, not a failure.
+        llm_active = True
+        llm_status = ("not needed this refresh — all sessions served from cache "
+                      "(existing LLM results preserved; use Force to re-run)")
+    elif client_error is not None:
+        llm_active = False
+        llm_status = f"OFF — client build failed: {client_error}"
+    elif client is None:
+        llm_active = False
+        llm_status = "off (no client)"
+    elif judge_errors:
+        llm_active = False
+        llm_status = (f"FAILING — {judge_errors} judge call(s) errored "
+                      f"(first: {first_judge_error}). "
+                      "Check the API key, base_url and model name for your endpoint.")
+    elif llm_judged:
+        llm_active = True
+        llm_status = f"ACTIVE — {llm_judged} session(s) judged this run"
+    else:
+        llm_active = True
+        llm_status = ("enabled, but no session this run needed a judge call "
+                      "(all cached or too short) — nothing to report")
+    print(f"[refresh done] analyzed={analyzed} reused={reused} "
+          f"total={len(sessions)} | LLM: {llm_status}", flush=True)
+
+    stats = {
+        "analyzed": analyzed,
+        "reused": reused,
+        "total": len(sessions),
+        # LLM diagnostics so the web UI can surface them too (not just the console).
+        "llm": {
+            "requested": use_llm,
+            "active": llm_active,
+            "status": llm_status,
+            "judged": llm_judged,
+            "judge_errors": judge_errors,
+            "first_error": first_judge_error,
+            "client_error": client_error,
+            "config": diag,
+        },
+    }
+    return analyses, stats
 
 
 def suggestions_for(analyses, min_pct=sa.DEFAULT_MIN_PCT, min_dollars=sa.DEFAULT_MIN_DOLLARS):

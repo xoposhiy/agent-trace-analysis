@@ -30,7 +30,7 @@ about — because a bare session ID tells you nothing.
 ### The task forest
 
 Rather than a single yes/no "did you switch tasks", the LLM assigns every one of your
-messages to a task and returns the tasks **in order**, letting a task **recur**:
+user prompts to a task and returns the tasks **in order**, letting a task **recur**:
 
 ```
 T1 → T2 → T1 → T3
@@ -144,6 +144,24 @@ precedence over the file.)
 structural analysis — only the task forest and summaries are omitted. If a key is set but
 a call fails, the tool prints the reason and falls back to structural analysis.
 
+### "I set my key but it still runs structural-only" — diagnostics
+
+On every run the tool now prints an **`[LLM check]`** block up front (CLI startup, `serve`
+startup, and each web Refresh) showing exactly what it resolved: whether `openai` and
+`python-dotenv` are installed, which `.env` files it loaded, your key (masked), the
+`base_url`, the `model`, and a verdict — `LLM ENABLED` or `LLM OFF` with the reason. The
+web dashboard also shows a colored banner after each Refresh saying whether the LLM was
+actually used. Common causes it will point you to:
+
+- **`python-dotenv` not installed** → your `.env` key is silently ignored. Install the
+  extra (`pip install ".[llm]"`) or `export OPENAI_API_KEY=...` in your shell.
+- **Blank `OPENAI_API_KEY=` line.** Put the key *after* the `=`, no quotes, no spaces. (A
+  blank line no longer blocks a real key in another `.env` — that trap is fixed — but a
+  blank key still means no LLM.)
+- **Key found but every judge call errors** (`FAILING — N judge call(s) errored`). The key
+  was picked up but the endpoint/model rejected the calls: check `--llm-base-url` /
+  `OPENAI_BASE_URL`, `--llm-model` / `SPLIT_ADVISOR_MODEL`, and any VPN the endpoint needs.
+
 ## Notes
 
 - All dollar figures are token-based **estimates** at blended Claude (Opus-4.x) rates,
@@ -154,5 +172,7 @@ a call fails, the tool prints the reason and falls back to structural analysis.
   less, and a sub-agent offload less still (it excises one segment, not half the ramp).
   Splitting the whole forest into separate sessions saves more than any single split, but
   none approach the ~70% theoretical ideal because carrying a summary is never free.
-- **Message vs turn:** a *message* is one prompt you typed; a *turn* is one assistant step
-  (tool call or reply). Split points are labelled by message, the cost math runs in turns.
+- **User prompt vs agent step:** a *user prompt* is one prompt you typed (the SWE-chat
+  paper's "prompt"); an *agent step* is one assistant step — a tool call or reply — after
+  a prompt (many agent steps make up the paper's "turn", i.e. one prompt→response
+  exchange). Split points are labelled by user prompt; the cost math runs in agent steps.

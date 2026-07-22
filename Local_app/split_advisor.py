@@ -51,19 +51,60 @@ import chunk_split_model as csm
 import session_core as core
 
 
+# Records what happened when we tried to load a project `.env`, so the diagnostics
+# can explain a silently-missing key (dotenv not installed, no .env found, or a .env
+# that existed but had no usable non-empty values).
+#   dotenv: was python-dotenv importable?
+#   found:  .env files that existed on disk (whether or not they had values)
+#   loaded: .env files that actually contributed at least one non-empty value
+_ENV_LOAD_INFO = {"dotenv": False, "found": [], "loaded": []}
+
+
 def _load_project_env():
     """Load a project `.env` (if python-dotenv is installed) so LLM settings can
-    live in a file instead of shell exports. Real environment variables always win
-    (load_dotenv override defaults to False), so a shell export still takes
-    precedence. Silently does nothing if python-dotenv isn't installed. Runs at
-    import time, BEFORE the env-derived defaults below are read."""
+    live in a file instead of shell exports. Runs at import time, BEFORE the
+    env-derived defaults below are read.
+
+    Precedence, from strongest to weakest:
+      1. a real (non-empty) shell export        — always wins, never overridden;
+      2. the `.env` next to this code;
+      3. the `.env` in the current directory.
+
+    We merge manually with `dotenv_values` rather than `load_dotenv` on purpose, to
+    fix a genuinely nasty trap: a BLANK `OPENAI_API_KEY=` line (the shipped template
+    and `.env.example` both have one) loaded via `load_dotenv(override=False)` writes
+    an empty string into the environment, which then BLOCKS a real key from a second
+    `.env` (or makes the app look like the key "wasn't picked up"). Here an empty
+    value never overrides anything — only a real, non-empty value fills a gap.
+
+    Silently doing nothing if python-dotenv isn't installed is recorded in
+    `_ENV_LOAD_INFO` so the diagnostics can flag it (a missing python-dotenv is the
+    #1 reason a key in `.env` is never picked up)."""
     try:
-        from dotenv import load_dotenv
+        from dotenv import dotenv_values
     except ImportError:
         return
+    _ENV_LOAD_INFO["dotenv"] = True
     # the .env shipped next to this code (works from any CWD), then one in the CWD
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-    load_dotenv()
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+        os.path.join(os.getcwd(), ".env"),
+    ]
+    seen = set()
+    for path in candidates:
+        if path in seen or not os.path.isfile(path):
+            continue
+        seen.add(path)
+        _ENV_LOAD_INFO["found"].append(path)
+        applied = False
+        for key, value in dotenv_values(path).items():
+            # only fill a var that isn't already a real value, and only with a real
+            # value — so shell exports win and blank lines never clobber anything.
+            if value and not os.environ.get(key):
+                os.environ[key] = value
+                applied = True
+        if applied:
+            _ENV_LOAD_INFO["loaded"].append(path)
 
 
 _load_project_env()
@@ -146,6 +187,10 @@ class Candidate:
     saving: dict                # from core.saving_for_split
     label: str                  # short human description of WHERE the split is
     detail: str = ""            # extra context (e.g. reason / call count)
+    # For a "sub-agent" candidate: the END fraction of the excised segment (its start
+    # is split_fraction). Lets the UI draw the excise-and-rejoin shape rather than a
+    # two-session split. None for task-switch / plan-mode (they split at one point).
+    split_end_fraction: Optional[float] = None
 
     @property
     def dollars(self):
@@ -188,6 +233,10 @@ class SessionAnalysis:
     # (e.g. endpoint down). Sessions too short to judge keep it True. The cache uses it
     # so a real result is reused but a failed one is retried next refresh.
     llm_ok: bool = True
+    # Transient (NOT serialised): the raw error string from the judge call when it
+    # failed (e.g. a 401 from a wrong key, a 404 for an unknown model, a timeout with
+    # no VPN). Surfaced by the diagnostics so a silent degrade becomes explainable.
+    llm_error: str = ""
 
 
 def _plan_mode_candidate(buckets, seq_turns, expl_phases, alpha):
@@ -201,7 +250,7 @@ def _plan_mode_candidate(buckets, seq_turns, expl_phases, alpha):
         source="plan-mode",
         split_fraction=frac,
         saving=saving,
-        label=f"after turn {first['end_turn']} (end of opening reading phase)",
+        label=f"after agent step {first['end_turn']} (end of opening reading phase)",
         detail=f"~{first['length']} reads before the first edit",
     )
 
@@ -221,8 +270,9 @@ def _subagent_candidate(buckets, seq_turns, expl_phases, alpha):
     return Candidate(
         source="sub-agent",
         split_fraction=f_start,
+        split_end_fraction=f_end,
         saving=saving,
-        label=f"turns {burst['start_turn']}–{burst['end_turn']} (mid-session reading burst)",
+        label=f"agent steps {burst['start_turn']}–{burst['end_turn']} (mid-session reading burst)",
         detail=f"~{burst['length']}-call reading burst that a sub-agent could handle",
     )
 
@@ -292,8 +342,9 @@ def _forest_candidates(task_forest, buckets, prompts, total_turns, alpha):
             if saving and saving["dollar_saving"] > 0:
                 parent_label = labels.get(tl, tl)
                 candidates.append(Candidate(
-                    source="sub-agent", split_fraction=span["f_start"], saving=saving,
-                    label=(f"{tid}: messages {span['start_msg']}–{span['end_msg']} "
+                    source="sub-agent", split_fraction=span["f_start"],
+                    split_end_fraction=span["f_end"], saving=saving,
+                    label=(f"{tid}: user prompts {span['start_msg']}–{span['end_msg']} "
                            f"(sub-agent within {tl})"),
                     detail=(labels.get(tid) or f"a side-task within {parent_label}")))
         elif prev_top is not None and tl != prev_top and tl not in seen_top:
@@ -302,7 +353,7 @@ def _forest_candidates(task_forest, buckets, prompts, total_turns, alpha):
             if saving and saving["dollar_saving"] > 0:
                 candidates.append(Candidate(
                     source="task-switch", split_fraction=span["f_start"], saving=saving,
-                    label=(f"at message {span['start_msg']} "
+                    label=(f"at user prompt {span['start_msg']} "
                            f"({prev_top}→{tl}, independent task)"),
                     detail=f"independent task switch {prev_top}→{tl}"))
         # else: a return to an earlier top-level task -> not a split point
@@ -397,8 +448,12 @@ def analyze_session(session_id, path, project, alpha=core.SUMMARY_ALPHA,
                 analysis.full_split = core.saving_for_multi_split(buckets, fracs, alpha)
             else:
                 # the judge was called but errored (e.g. endpoint down) — mark it so the
-                # cache retries this session next time instead of storing an empty result
+                # cache retries this session next time instead of storing an empty result,
+                # and keep the raw error so the diagnostics can explain WHY (bad key, bad
+                # model, unreachable endpoint, timeout, ...).
                 analysis.llm_ok = False
+                if judge_forest and judge_forest.get("error"):
+                    analysis.llm_error = str(judge_forest["error"])
 
     analysis.candidates = candidates
     if candidates:
@@ -478,6 +533,103 @@ def make_llm_client(base_url=DEFAULT_LLM_BASE_URL):
     the SDK uses its own default endpoint."""
     from openai import OpenAI      # imported here so the default path needs no openai
     return OpenAI(base_url=base_url) if base_url else OpenAI()
+
+
+# ======================================================================
+# LLM diagnostics — make a silent degrade to structural-only explainable
+# ======================================================================
+
+def _mask_key(key):
+    """Show just enough of a key to confirm the right one is loaded, never the whole
+    thing: 'sk-abcd…wxyz (43 chars)'. Returns '(not set)' when empty."""
+    if not key:
+        return "(not set)"
+    body = f"{key[:5]}…{key[-4:]}" if len(key) > 12 else "…"
+    return f"{body} ({len(key)} chars)"
+
+
+def llm_config_diagnostics(base_url=None, model=None):
+    """Inspect the current LLM configuration WITHOUT making a network call, and
+    return a dict describing exactly what the tool will do:
+
+        {dotenv, env_files, key_set, key_masked, base_url, model, openai_installed,
+         will_use_llm, reasons}
+
+    `reasons` is a list of human-readable notes explaining anything that would stop
+    the LLM from being used (no key, dotenv missing, .env not found, ...). This is
+    the single source of truth for both the CLI and the web dashboard so their
+    "why is the LLM off?" messages always agree."""
+    key = os.environ.get("OPENAI_API_KEY", "")
+    base_url = base_url if base_url is not None else DEFAULT_LLM_BASE_URL
+    model = model or DEFAULT_JUDGE_MODEL
+    try:
+        import openai  # noqa: F401
+        openai_installed = True
+    except ImportError:
+        openai_installed = False
+
+    reasons = []
+    if not openai_installed:
+        reasons.append("the `openai` package is not installed — run "
+                       "`pip install \".[llm]\"` (or `pip install openai`).")
+    if not key:
+        reasons.append("OPENAI_API_KEY is not set in the environment.")
+        if not _ENV_LOAD_INFO["dotenv"]:
+            reasons.append("python-dotenv is NOT installed, so any key in a `.env` "
+                           "file was ignored — run `pip install \".[llm]\"` or export "
+                           "the key in your shell.")
+        elif not _ENV_LOAD_INFO["found"]:
+            reasons.append("no `.env` file was found next to the code or in the "
+                           "current directory (checked both). Copy .env.example to "
+                           ".env and put your key in it, or export OPENAI_API_KEY.")
+        else:
+            found = ", ".join(_ENV_LOAD_INFO["found"])
+            reasons.append(f"a `.env` was found ({found}) but its OPENAI_API_KEY line "
+                           "is blank — put your key after the '=' (no quotes, no spaces).")
+
+    return {
+        "dotenv": _ENV_LOAD_INFO["dotenv"],
+        "env_files": list(_ENV_LOAD_INFO["loaded"]),
+        "env_files_found": list(_ENV_LOAD_INFO["found"]),
+        "key_set": bool(key),
+        "key_masked": _mask_key(key),
+        "base_url": base_url or "(OpenAI SDK default)",
+        "model": model,
+        "openai_installed": openai_installed,
+        "will_use_llm": openai_installed and bool(key),
+        "reasons": reasons,
+    }
+
+
+def print_llm_diagnostics(base_url=None, model=None, header="LLM configuration"):
+    """Print the pre-flight LLM diagnostics (no network call). Called at startup so a
+    user immediately sees whether their key was picked up and, if not, precisely why.
+    Returns the diagnostics dict so callers can branch on `will_use_llm`."""
+    d = llm_config_diagnostics(base_url, model)
+    print(f"[{header}]", flush=True)
+    print(f"  openai package : {'yes' if d['openai_installed'] else 'NO'}", flush=True)
+    print(f"  python-dotenv  : {'yes' if d['dotenv'] else 'no (.env files ignored)'}",
+          flush=True)
+    if d["env_files"]:
+        print(f"  .env loaded    : {', '.join(d['env_files'])}", flush=True)
+    elif d["env_files_found"]:
+        print(f"  .env found     : {', '.join(d['env_files_found'])} "
+              f"(no non-empty values used)", flush=True)
+    else:
+        print("  .env loaded    : none found", flush=True)
+    print(f"  OPENAI_API_KEY : {d['key_masked']}", flush=True)
+    print(f"  base_url       : {d['base_url']}", flush=True)
+    print(f"  model          : {d['model']}", flush=True)
+    if d["will_use_llm"]:
+        print("  → LLM ENABLED (task summaries + task-forest judge will run).",
+              flush=True)
+        print("    If summaries are still missing, the endpoint/model may be "
+              "rejecting calls — watch for per-refresh judge errors below.", flush=True)
+    else:
+        print("  → LLM OFF — falling back to structural-only. Why:", flush=True)
+        for r in d["reasons"]:
+            print(f"      - {r}", flush=True)
+    return d
 
 
 def judge_task_forest(client, prompt_texts, model=DEFAULT_JUDGE_MODEL):
@@ -599,7 +751,7 @@ def render_report(analyses, suggestions, min_pct, min_dollars, used_llm):
     # ---- ranked suggestions table ----
     if suggested:
         lines.append("## Suggestions (ranked by modelled saving)\n")
-        lines.append("| Session | Project | Turns | Peak | Pattern | Split point | Save $ | Save % |")
+        lines.append("| Session | Project | Agent steps | Peak | Pattern | Split point | Save $ | Save % |")
         lines.append("|---|---|---:|---:|:---:|---|---:|---:|")
         for s in sorted(suggested, key=lambda x: (x.candidate.dollars, x.candidate.pct), reverse=True):
             a, c = s.analysis, s.candidate
@@ -617,7 +769,7 @@ def render_report(analyses, suggestions, min_pct, min_dollars, used_llm):
             lines.append(f"**`{a.session_id}`** — {a.project}")
             if a.task_summary:
                 lines.append(f"- Task: {a.task_summary}")
-            lines.append(f"- {a.turns} turns, {a.tool_calls} tool calls, "
+            lines.append(f"- {a.turns} agent steps, {a.tool_calls} tool calls, "
                          f"peak context ~{_fmt_k(a.peak_context)} tokens, "
                          f"as-is cost ${a.as_is_cost:.2f}")
             lines.append(f"- {s.message}")
@@ -746,6 +898,9 @@ def main():
     # structural-only report rather than crashing.
     client = None
     if not args.no_llm:
+        # Pre-flight diagnostics up front: shows whether the key was picked up and,
+        # if not, exactly why (dotenv missing, no .env, key unset, ...).
+        print_llm_diagnostics(args.llm_base_url, args.llm_model)
         try:
             client = make_llm_client(args.llm_base_url)
         except Exception as e:
@@ -756,13 +911,29 @@ def main():
              else " (structural heuristics only; no LLM)…"))
 
     analyses = []
+    judge_errors = 0
+    first_judge_error = None
     for session_id, path, project in sessions:
         try:
-            analyses.append(analyze_session(session_id, path, project,
-                                             alpha=args.alpha, client=client,
-                                             model=args.llm_model))
+            a = analyze_session(session_id, path, project, alpha=args.alpha,
+                                client=client, model=args.llm_model)
+            analyses.append(a)
+            if a.llm_error:
+                judge_errors += 1
+                if first_judge_error is None:
+                    first_judge_error = a.llm_error
         except Exception as e:
             print(f"  skipped {session_id[:8]}: {e}")
+
+    # If the client built but every judge call failed, that is the classic
+    # "key set but wrong endpoint/model/VPN" case — call it out explicitly rather
+    # than letting the report quietly show no summaries.
+    if client is not None and judge_errors:
+        print(f"\n⚠ LLM client built, but {judge_errors} judge call(s) FAILED "
+              f"— first error: {first_judge_error}")
+        print("  The key was found but the endpoint/model rejected the calls. "
+              "Check --llm-base-url and --llm-model match your provider "
+              "(and any VPN the endpoint needs).")
 
     suggestions = [s for s in (decide_suggestion(a, args.min_pct, args.min_dollars)
                                for a in analyses) if s]

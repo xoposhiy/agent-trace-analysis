@@ -11,7 +11,7 @@
     <header>
       <h1>Claude Split Advisor</h1>
       <p>Your Claude Code sessions, segmented into a forest of tasks — split points priced locally. Nothing is uploaded.</p>
-      <p class="note">“Message N” = your <b>N</b>th typed prompt (message 1 = your first). “Turn N” = the <b>N</b>th assistant step (one tool call or reply) — one message usually spans many turns, and the cost math (context growth, phases) is measured in turns.</p>
+      <p class="note">“User prompt N” = your <b>N</b>th typed prompt (user prompt 1 = your first). “Agent step N” = the <b>N</b>th agent action after a prompt (one tool call or reply) — one user prompt usually spans many agent steps, and the cost math (context growth, phases) is measured in agent steps.</p>
     </header>
 
     <div class="toolbar">
@@ -19,6 +19,10 @@
       <label><input type="checkbox" id="useLlm" checked /> Use LLM (task forest)</label>
       <span id="status" class="status"></span>
     </div>
+
+    <!-- LLM diagnostics banner: after a refresh, says whether the LLM was actually
+         used, or why it fell back to structural-only (hidden until first refresh). -->
+    <div id="llmBanner" class="llm-banner" hidden></div>
 
     <div class="tiles">
       <div class="tile"><div class="k">Sessions scanned</div><div class="v" id="tScanned">—</div></div>
@@ -31,6 +35,13 @@
       <div class="f">
         <span class="lbl">Project</span>
         <select id="fProject"><option value="">All projects</option></select>
+      </div>
+      <div class="f">
+        <span class="lbl">Sort by</span>
+        <select id="fSort">
+          <option value="dollars">Saving $ (then %)</option>
+          <option value="pct">Saving % (then $)</option>
+        </select>
       </div>
       <div class="f">
         <span class="lbl">Min saving %: <b id="lblPct">10</b></span>

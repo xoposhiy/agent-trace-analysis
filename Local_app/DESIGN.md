@@ -1,3 +1,4 @@
+
 # Claude Split Advisor
 
 A local tool that scans your own Claude Code sessions, uses an LLM to segment each into a
@@ -10,14 +11,17 @@ it still runs fully offline (structural heuristics only).
 
 ## Main ideas
 
-**Message vs turn.** A *message* is one prompt you typed; a *turn* is one assistant step
-(a tool call or reply). One message spans many turns, and the cost math runs in turns.
+**User prompt vs agent step.** A *user prompt* is one prompt you typed (the SWE-chat
+paper's "prompt"); an *agent step* is one assistant step — a tool call or reply — after a
+prompt. One user prompt spans many agent steps (which together make up the paper's "turn",
+one prompt→response exchange), and the cost math runs in agent steps.
 
 **Cost model (linear context ramp).** Context grows ~linearly from 0 to a peak across the
-turns; every turn re-reads the whole context, so total cost ≈ the area under that ramp.
-A split replaces one big triangle with smaller ones, minus the cost of a carried summary.
+agent steps; every step re-reads the whole context, so total cost ≈ the area under that
+ramp. A split replaces one big triangle with smaller ones, minus the cost of a carried
+summary.
 
-**Hierarchical task forest.** Every message gets a task id: top-level ids (`T1`, `T2`) are
+**Hierarchical task forest.** Every user prompt gets a task id: top-level ids (`T1`, `T2`) are
 independent goals that may recur (`T1 → T2 → T1`); dotted children (`T1.1`) are
 related-but-tangential side-tasks — especially an interruption you returned to.
 
@@ -43,6 +47,25 @@ floor.
 transcript's file signature). On a dashboard refresh the app re-analyses only the sessions
 that are new or have changed since last time and reloads everything else from the cache —
 so it never re-spends LLM quota on sessions already seen.
+
+**Best split, previewed.** Each session card leads with its single best split, shown as a
+small before/after diagram. The top bar is the whole session; the arrow marks the point
+where the split happens; and the second bar shows the session broken into the two resulting
+sessions, each carrying a small grey summary block. The `−% cost` underneath is what that
+split saves.
+
+**Full analysis on demand.** "See full analysis" opens a modal listing every considered
+split point; clicking one emphasises its marker on the context-ramp graph and previews that
+specific split, so each option can be inspected on its own. A **Sort by** control — by
+saving in dollars or by percent, the other as tie-break — orders the list and composes with
+the minimum-percent and minimum-dollar floors.
+
+**LLM diagnostics, offline by default.** With no key the tool runs fully offline
+(structural heuristics only). When the LLM is meant to be on, it prints an explicit check at
+startup and each refresh — packages present, which `.env` loaded, key (masked), endpoint /
+model, and a verdict (`ENABLED` / `OFF` with the reason, or `FAILING` with the first judge
+error) — instead of silently degrading. A blank `OPENAI_API_KEY=` line never blocks a real
+key set elsewhere.
 
 ## Files
 
