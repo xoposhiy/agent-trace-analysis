@@ -74,6 +74,16 @@ header p.note {
   display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
   margin-bottom: 16px;
 }
+.src-group {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-secondary);
+}
+.src-group span { font-size: 12px; color: var(--muted); }
+.src-group select, .src-group input {
+  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); min-width: 150px;
+}
+.source-only[hidden] { display: none !important; }
 button.refresh {
   background: var(--series-1); color: #fff; border: 0; border-radius: 8px;
   padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer;

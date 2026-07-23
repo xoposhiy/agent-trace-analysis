@@ -116,6 +116,9 @@ _load_project_env()
 # $HOME / $CLAUDE_CONFIG_DIR), so it is correct on any machine, not just the author's.
 DEFAULT_PROJECTS_DIR = os.path.join(
     os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")), "projects")
+DEFAULT_SOURCE = "local"
+DEFAULT_SWECHAT_REPO = "SALT-NLP/SWE-chat"
+DEFAULT_SWECHAT_SPLIT = "train"
 DEFAULT_MIN_PCT = 10.0        # suggest only if modelled saving is >= this % of cost
 DEFAULT_MIN_DOLLARS = 0.50    # ...AND at least this many dollars
 # Report goes to the current working directory by default — never into the install
@@ -136,19 +139,223 @@ DEFAULT_LLM_BASE_URL = os.environ.get("OPENAI_BASE_URL")   # None -> SDK default
 # Local session discovery + reading
 # ======================================================================
 
-def discover_sessions(projects_dir=DEFAULT_PROJECTS_DIR, project_filter=None):
-    """Find every session transcript. Returns [(session_id, path, project), ...]."""
+def discover_sessions(projects_dir=DEFAULT_PROJECTS_DIR, project_filter=None,
+                      source=DEFAULT_SOURCE, dataset_repo=DEFAULT_SWECHAT_REPO,
+                      dataset_split=DEFAULT_SWECHAT_SPLIT):
+    """Find every session transcript.
+
+    Returns [(session_id, path, project), ...] where `path` is always local and
+    suitable for `read_local_transcript`.
+    """
+    if source == "local":
+        found = []
+        for project_dir in sorted(glob.glob(os.path.join(projects_dir, "*"))):
+            if not os.path.isdir(project_dir):
+                continue
+            project = os.path.basename(project_dir)
+            if project_filter and project_filter not in project:
+                continue
+            for path in sorted(glob.glob(os.path.join(project_dir, "*.jsonl"))):
+                session_id = os.path.splitext(os.path.basename(path))[0]
+                found.append((session_id, path, project))
+        return found
+
+    if source == "swe-chat":
+        return _discover_swe_chat_sessions(dataset_repo, dataset_split, project_filter)
+
+    raise ValueError(f"unknown source: {source}")
+
+
+# conversations columns we actually need to synthesize a transcript — selecting just
+# these keeps the (2.69M-row) table small enough to pull into Python. The per-row token
+# columns are deliberately NOT here: pricing uses the authoritative `sessions` totals.
+_SWECHAT_CONV_COLUMNS = [
+    "session_id", "repo_id", "turn_number", "turn_type", "content",
+    "is_conversational", "role", "tool_input_json", "tool_call_id", "tool_name",
+]
+
+
+def _is_claude_code_agent(agent):
+    """True if a SWE-chat session was produced by Claude Code. The dataset is
+    MULTI-AGENT (Claude Code ~83%, plus OpenCode / Codex / Gemini CLI / Cursor / …),
+    but this tool models Claude Code specifically — Claude's transcript shape and Opus
+    pricing — so every other agent must be excluded or the dollar figures are wrong.
+    Matches the canonical 'Claude Code' and the lone 'claude-code' variant, case- and
+    separator-insensitively; everything else (incl. 'unknown', 'Agent') is rejected."""
+    norm = str(agent or "").strip().lower().replace("-", " ").replace("_", " ")
+    return norm == "claude code"
+
+
+def _bare_session_id(sid):
+    """Strip a leading `YYYY-MM-DD-` date prefix so `sessions`-table ids (which carry
+    one) join to `conversations` ids (mostly bare UUIDs). Ids without the prefix pass
+    through unchanged. 'YYYY-MM-DD-<uuid>' -> '<uuid>'."""
+    if (isinstance(sid, str) and len(sid) > 11 and sid[:4].isdigit()
+            and sid[4] == "-" and sid[7] == "-" and sid[10] == "-"):
+        return sid[11:]
+    return sid
+
+
+def _discover_swe_chat_sessions(dataset_repo, dataset_split, project_filter=None):
+    """Discover SWE-chat sessions and materialize local Claude-like JSONL transcripts.
+
+    Two tables feed this, with a deliberate split of responsibility:
+      * `sessions` — the AUTHORITATIVE per-session token/cost aggregates
+        (input/output/cache tokens + api_call_count). These drive all pricing.
+      * `conversations` — the ordered event STRUCTURE only (user prompts, tool calls,
+        tool results). Its per-row token splits undercount the real totals by 10-100x,
+        so they are NOT summed for cost; only the shape is used.
+
+    We synthesize a Claude-like event stream from the conversations rows and inject the
+    sessions-table totals as a single `usage_totals` event, so the rest of the pipeline
+    (which reads local JSONL transcripts) stays unchanged. Session ids are normalized
+    (date-prefix stripped) so the two tables join even though `sessions` prefixes ids.
+    """
+    try:
+        import pyarrow.compute as pc
+        from datasets import load_dataset
+    except ImportError as e:
+        raise RuntimeError(
+            "SWE-chat mode requires `datasets`, `huggingface_hub` and `pyarrow`. "
+            "Install the dashboard extras, e.g. `pip install \".[web]\"`."
+        ) from e
+
+    try:
+        sessions = load_dataset(dataset_repo, "sessions", split=dataset_split)
+        conversations = load_dataset(dataset_repo, "conversations", split=dataset_split)
+    except Exception as e:
+        raise RuntimeError(
+            f"failed to load SWE-chat sessions from {dataset_repo!r} split {dataset_split!r}: {e}\n"
+            "If the dataset is gated for your account, accept the terms on Hugging Face\n"
+            "and run `hf auth login` before using SWE-chat mode."
+        ) from e
+
+    # Pick this repo's sessions and keep their authoritative totals, keyed by a
+    # normalized id so they join to conversations rows. We keep ONLY Claude Code
+    # sessions (the dataset is multi-agent) — see _is_claude_code_agent.
+    wanted = {}
+    skipped_non_claude = 0
+    for row in sessions:
+        repo_id = row.get("repo_id") or ""
+        if project_filter and project_filter not in repo_id:
+            continue
+        if not _is_claude_code_agent(row.get("agent")):
+            skipped_non_claude += 1
+            continue
+        sid = row["session_id"]
+        wanted[_bare_session_id(sid)] = {
+            "session_id": sid,
+            "project": repo_id or "SWE-chat",
+            # renamed to Claude's usage keys so `usage_totals` is self-describing:
+            # sessions uses cache_creation_tokens / cache_read_tokens.
+            "totals": {
+                "input_tokens": int(row.get("input_tokens") or 0),
+                "output_tokens": int(row.get("output_tokens") or 0),
+                "cache_creation_input_tokens": int(row.get("cache_creation_tokens") or 0),
+                "cache_read_input_tokens": int(row.get("cache_read_tokens") or 0),
+                "api_calls": int(row.get("api_call_count") or 0),
+            },
+        }
+    if skipped_non_claude:
+        print(f"  [swe-chat] skipped {skipped_non_claude} non-Claude-Code session(s) "
+              f"(dataset is multi-agent; only Claude Code is analysed).", flush=True)
+    if not wanted:
+        return []
+
+    # Grab only the conversations rows we need. With a repo filter (the normal case) we
+    # filter the 2.69M-row table by its `repo_id` column VECTORIZED via pyarrow —
+    # iterating every row in Python is far too slow — then group the small remainder.
+    table = conversations.data.table
+    table = table.select([c for c in _SWECHAT_CONV_COLUMNS if c in table.column_names])
+    if project_filter:
+        mask = pc.match_substring(pc.fill_null(table.column("repo_id"), ""), project_filter)
+        table = table.filter(mask)
+
+    rows_by_session = {}
+    for row in table.to_pylist():
+        norm = _bare_session_id(row.get("session_id"))
+        if norm not in wanted:
+            continue
+        rows_by_session.setdefault(norm, []).append(row)
+
+    transcript_root = _swechat_transcript_root(dataset_repo, dataset_split)
     found = []
-    for project_dir in sorted(glob.glob(os.path.join(projects_dir, "*"))):
-        if not os.path.isdir(project_dir):
+    for norm, meta in wanted.items():
+        session_rows = rows_by_session.get(norm)
+        if not session_rows:
             continue
-        project = os.path.basename(project_dir)
-        if project_filter and project_filter not in project:
-            continue
-        for path in sorted(glob.glob(os.path.join(project_dir, "*.jsonl"))):
-            session_id = os.path.splitext(os.path.basename(path))[0]
-            found.append((session_id, path, project))
+        # conversations rows aren't guaranteed grouped/ordered — sort into transcript order.
+        session_rows.sort(key=lambda r: (r.get("turn_number") or 0))
+        local_path = _write_swechat_transcript(
+            transcript_root, meta["session_id"], session_rows, meta["totals"])
+        found.append((meta["session_id"], local_path, meta["project"]))
     return found
+
+
+def _swechat_transcript_root(dataset_repo, dataset_split):
+    repo_slug = dataset_repo.replace("/", "__")
+    split_slug = dataset_split.replace("/", "_")
+    return os.path.join(
+        os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
+        "split_advisor_swechat",
+        repo_slug,
+        split_slug,
+    )
+
+
+def _write_swechat_transcript(transcript_root, session_id, rows, totals=None):
+    os.makedirs(transcript_root, exist_ok=True)
+    path = os.path.join(transcript_root, f"{session_id}.jsonl")
+
+    events = []
+    # Authoritative session totals come from the `sessions` table (see
+    # _discover_swe_chat_sessions), injected as one usage_totals event the cost model
+    # trusts. We do NOT attach the conversations rows' per-turn usage — it undercounts.
+    if totals:
+        events.append({"type": "usage_totals", **totals})
+
+    for row in rows:
+        turn_type = row.get("turn_type")
+        content = row.get("content")
+        if turn_type == "user_prompt" or (row.get("is_conversational") and row.get("role") == "user"):
+            events.append({"type": "user", "message": {"content": content or ""}})
+            continue
+        if turn_type == "assistant_response" or (row.get("is_conversational") and row.get("role") == "assistant"):
+            events.append({"type": "assistant", "message": {"content": content or ""}})
+            continue
+        if turn_type == "tool_use":
+            tool_input = row.get("tool_input_json") or "{}"
+            try:
+                parsed_input = json.loads(tool_input) if isinstance(tool_input, str) else (tool_input or {})
+            except Exception:
+                parsed_input = {}
+            events.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": row.get("tool_call_id"),
+                 "name": row.get("tool_name") or "unknown", "input": parsed_input}
+            ]}})
+            continue
+        if turn_type == "tool_result":
+            events.append({"type": "assistant", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": row.get("tool_call_id"),
+                 "content": content or ""}
+            ]}})
+            continue
+
+    payload = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events)
+    # SWE-chat data is static, but discovery runs on every dashboard refresh. Only
+    # rewrite when the content actually changed — otherwise the file's mtime would bump
+    # each refresh, invalidating the (mtime, size) cache signature and forcing a full
+    # re-analysis (and a fresh LLM call) every time. Skipping the no-op write keeps the
+    # signature stable so the incremental cache reuses these sessions.
+    try:
+        with open(path) as f:
+            if f.read() == payload:
+                return path
+    except OSError:
+        pass
+    with open(path, "w") as f:
+        f.write(payload)
+    return path
 
 
 def read_local_transcript(path):
@@ -447,13 +654,15 @@ def analyze_session(session_id, path, project, alpha=core.SUMMARY_ALPHA,
                 fracs = _top_level_fractions(analysis.task_forest, prompts, total_turns)
                 analysis.full_split = core.saving_for_multi_split(buckets, fracs, alpha)
             else:
-                # the judge was called but errored (e.g. endpoint down) — mark it so the
-                # cache retries this session next time instead of storing an empty result,
-                # and keep the raw error so the diagnostics can explain WHY (bad key, bad
-                # model, unreachable endpoint, timeout, ...).
-                analysis.llm_ok = False
+                # the judge was called but errored — record the raw error so the
+                # diagnostics can explain WHY (bad key, bad model, unreachable endpoint,
+                # timeout, ...). A TRANSIENT error (endpoint down) leaves llm_ok False so
+                # the session is retried next refresh; a PERMANENT one (the session is too
+                # large to ever fit the judge — `truncated`) leaves llm_ok True so it is
+                # cached as structural-only and not re-attempted on every refresh.
                 if judge_forest and judge_forest.get("error"):
                     analysis.llm_error = str(judge_forest["error"])
+                analysis.llm_ok = bool(judge_forest and judge_forest.get("truncated"))
 
     analysis.candidates = candidates
     if candidates:
@@ -637,19 +846,37 @@ def judge_task_forest(client, prompt_texts, model=DEFAULT_JUDGE_MODEL):
     per-message assignments + within-task sub-agent opportunities + a one-line
     summary). Returns the parsed dict, or {'error': ...} on any failure.
 
-    max_tokens is generous because the response scales with the message count
-    (one assignment per message) rather than the fixed old yes/no answer."""
+    The prompt asks for MINIFIED JSON (see build_task_forest_prompt), which keeps even a
+    50+ prompt forest well under ~1k output tokens, so a flat generous cap is plenty and
+    — since billing is on tokens ACTUALLY generated — costs nothing extra. Only a
+    genuinely enormous session (hundreds of user prompts, usually a heavily-compacted
+    mega-session) can still overflow; those are flagged `truncated` so the caller can
+    fall back to structural WITHOUT retrying a call that can never fit."""
+    max_tokens = 8000
     try:
         response = client.chat.completions.create(
             model=model,
-            max_tokens=900,
+            max_tokens=max_tokens,
             temperature=0,
             messages=[{"role": "user",
                        "content": core.build_task_forest_prompt(prompt_texts)}],
         )
-        text = response.choices[0].message.content.strip()
+        choice = response.choices[0]
+        text = (choice.message.content or "").strip()
         text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            # A response that hit the token cap (finish_reason='length') is a DIFFERENT
+            # failure from a bad key/endpoint: the JSON was cut off, not rejected. It's
+            # also PERMANENT for this session (a bigger cap won't help — the model loops
+            # on huge inputs), so flag it `truncated` so we don't retry it every refresh.
+            if choice.finish_reason == "length":
+                return {"error": (f"judge response truncated at {max_tokens} tokens "
+                                  f"for a {len(prompt_texts)}-prompt session (too large "
+                                  f"to segment) — using structural analysis"),
+                        "truncated": True}
+            return {"error": f"could not parse judge JSON: {e}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -816,10 +1043,16 @@ def print_summary(analyses, suggestions, min_pct, min_dollars):
 def build_arg_parser():
     p = argparse.ArgumentParser(
         description="Scan local Claude Code sessions and suggest worthwhile semantic splits.")
+    p.add_argument("--source", choices=["local", "swe-chat"], default=DEFAULT_SOURCE,
+                   help="where to read sessions from: local Claude transcripts or SWE-chat")
     p.add_argument("--projects-dir", default=DEFAULT_PROJECTS_DIR,
-                   help="root of Claude Code project transcripts (default: ~/.claude/projects)")
+                   help="root of Claude Code project transcripts (local source only)")
+    p.add_argument("--dataset-repo", default=DEFAULT_SWECHAT_REPO,
+                   help=f"Hugging Face dataset repo for SWE-chat mode (default: {DEFAULT_SWECHAT_REPO})")
+    p.add_argument("--dataset-split", default=DEFAULT_SWECHAT_SPLIT,
+                   help=f"dataset split for SWE-chat mode (default: {DEFAULT_SWECHAT_SPLIT})")
     p.add_argument("--project", default=None,
-                   help="only sessions whose project dir name contains this substring")
+                   help="only sessions whose project dir name / repo_id contains this substring")
     p.add_argument("--min-pct", type=float, default=DEFAULT_MIN_PCT,
                    help=f"minimum saving %% to suggest a split (default: {DEFAULT_MIN_PCT})")
     p.add_argument("--min-dollars", type=float, default=DEFAULT_MIN_DOLLARS,
@@ -871,9 +1104,21 @@ def _serve_command(argv):
                                  description="Launch the local web dashboard.")
     p.add_argument("--host", default="127.0.0.1", help="bind host (default: localhost)")
     p.add_argument("--port", type=int, default=8000, help="bind port (default: 8000)")
+    p.add_argument("--source", choices=["local", "swe-chat"], default=DEFAULT_SOURCE,
+                   help="where to read sessions from")
+    p.add_argument("--projects-dir", default=DEFAULT_PROJECTS_DIR,
+                   help="root of Claude Code project transcripts (local source only)")
+    p.add_argument("--dataset-repo", default=DEFAULT_SWECHAT_REPO,
+                   help=f"Hugging Face dataset repo for SWE-chat mode (default: {DEFAULT_SWECHAT_REPO})")
+    p.add_argument("--dataset-split", default=DEFAULT_SWECHAT_SPLIT,
+                   help=f"dataset split for SWE-chat mode (default: {DEFAULT_SWECHAT_SPLIT})")
+    p.add_argument("--project", default=None,
+                   help="only sessions whose project dir name / repo_id contains this substring")
     args = p.parse_args(argv)
     from web.app import serve
-    serve(host=args.host, port=args.port)
+    serve(host=args.host, port=args.port, source=args.source,
+          projects_dir=args.projects_dir, project_filter=args.project,
+          dataset_repo=args.dataset_repo, dataset_split=args.dataset_split)
 
 
 def main():
@@ -886,10 +1131,16 @@ def main():
 
     args = build_arg_parser().parse_args()
 
-    sessions = discover_sessions(args.projects_dir, args.project)
+    sessions = discover_sessions(projects_dir=args.projects_dir, project_filter=args.project,
+                                 source=args.source, dataset_repo=args.dataset_repo,
+                                 dataset_split=args.dataset_split)
     if not sessions:
-        print(f"No sessions found under {args.projects_dir}"
-              + (f" matching '{args.project}'." if args.project else "."))
+        if args.source == "local":
+            print(f"No sessions found under {args.projects_dir}"
+                  + (f" matching '{args.project}'." if args.project else "."))
+        else:
+            print(f"No SWE-chat sessions found in {args.dataset_repo} [{args.dataset_split}]"
+                  + (f" matching '{args.project}'." if args.project else "."))
         return
 
     # By default an LLM client is built so every suggestion carries a task
@@ -906,7 +1157,9 @@ def main():
         except Exception as e:
             _explain_no_llm(e, args.llm_model)
 
-    print(f"Analysing {len(sessions)} session(s)"
+    source_label = "local transcripts" if args.source == "local" else (
+        f"SWE-chat dataset {args.dataset_repo}[{args.dataset_split}]")
+    print(f"Analysing {len(sessions)} session(s) from {source_label}"
           + (" with LLM task summaries + task-forest judge…" if client
              else " (structural heuristics only; no LLM)…"))
 
@@ -929,11 +1182,18 @@ def main():
     # "key set but wrong endpoint/model/VPN" case — call it out explicitly rather
     # than letting the report quietly show no summaries.
     if client is not None and judge_errors:
-        print(f"\n⚠ LLM client built, but {judge_errors} judge call(s) FAILED "
-              f"— first error: {first_judge_error}")
-        print("  The key was found but the endpoint/model rejected the calls. "
-              "Check --llm-base-url and --llm-model match your provider "
-              "(and any VPN the endpoint needs).")
+        judged = sum(1 for a in analyses if a.task_forest)
+        print(f"\n⚠ {judge_errors} judge call(s) FAILED "
+              f"({judged} session(s) judged OK) — first error: {first_judge_error}")
+        # Only point at the key/endpoint when NOTHING judged — that's the auth/endpoint
+        # signature. If some sessions judged fine, the endpoint is reachable and the
+        # failures are per-session (e.g. a response truncated for a very long session).
+        if judged == 0:
+            print("  Nothing judged at all: check --llm-base-url and --llm-model match "
+                  "your provider, the key is valid, and any VPN the endpoint needs.")
+        else:
+            print("  The endpoint works (some sessions judged); these failures are "
+                  "per-session — see the error above.")
 
     suggestions = [s for s in (decide_suggestion(a, args.min_pct, args.min_dollars)
                                for a in analyses) if s]

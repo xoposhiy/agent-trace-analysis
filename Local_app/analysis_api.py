@@ -32,6 +32,18 @@ DEFAULT_CACHE_PATH = os.path.join(
     os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
     "split_advisor_cache.json")
 
+
+def cache_path_for_source(source=sa.DEFAULT_SOURCE, dataset_repo=sa.DEFAULT_SWECHAT_REPO,
+                          dataset_split=sa.DEFAULT_SWECHAT_SPLIT):
+    """Return a source-specific cache path so local and SWE-chat runs stay separate."""
+    if source == "local":
+        return DEFAULT_CACHE_PATH
+    repo_slug = dataset_repo.replace("/", "__")
+    split_slug = dataset_split.replace("/", "_")
+    return os.path.join(
+        os.environ.get("CLAUDE_CONFIG_DIR", os.path.expanduser("~/.claude")),
+        f"split_advisor_cache.{repo_slug}.{split_slug}.json")
+
 # Bump when the analysis logic changes (not just the transcripts), so an old cache
 # built by a previous version is discarded and everything is re-analysed once.
 # v7: terminology rename in split-point labels ("message" -> "user prompt",
@@ -155,7 +167,9 @@ def save_cache(cache, cache_path=DEFAULT_CACHE_PATH):
 def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
                 use_llm=True, alpha=core.SUMMARY_ALPHA,
                 model=sa.DEFAULT_JUDGE_MODEL, base_url=sa.DEFAULT_LLM_BASE_URL,
-                cache_path=DEFAULT_CACHE_PATH, force=False, progress=None):
+                cache_path=None, force=False, progress=None,
+                source=sa.DEFAULT_SOURCE, dataset_repo=sa.DEFAULT_SWECHAT_REPO,
+                dataset_split=sa.DEFAULT_SWECHAT_SPLIT, max_workers=8):
     """Analyse every discovered session, reusing the cache for unchanged ones.
 
     Only sessions that are NEW or whose transcript changed since last time are
@@ -166,7 +180,12 @@ def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
     Returns (analyses, stats) where stats = {analyzed, reused, total}. The LLM
     client is built lazily, so a fully-cached refresh makes no network calls at all.
     """
-    sessions = sa.discover_sessions(projects_dir, project_filter)
+    if cache_path is None:
+        cache_path = cache_path_for_source(source, dataset_repo, dataset_split)
+
+    sessions = sa.discover_sessions(projects_dir=projects_dir, project_filter=project_filter,
+                                    source=source, dataset_repo=dataset_repo,
+                                    dataset_split=dataset_split)
     cache = load_cache(cache_path)
     entries = cache["sessions"]
 
@@ -187,67 +206,94 @@ def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
     analyses = []
     analyzed = reused = 0
 
+    # --- Phase 1: partition sessions into reuse-from-cache vs (re)analyse ---
+    # Reuse when the transcript is unchanged, being careful about LLM mode:
+    #   - a cached LLM result satisfies ANY request — we never throw away a forest
+    #     just because the toggle is off, so flipping LLM off/on never re-runs a
+    #     session already analysed with the LLM;
+    #   - a cached structural-only result satisfies only a no-LLM request; if the
+    #     caller now wants the LLM, we fall through and UPGRADE it.
+    to_analyze = []
     for session_id, path, project in sessions:
         try:
             sig = file_signature(path)
         except OSError:
             continue      # transcript vanished between discovery and stat — skip
-
         cached = entries.get(session_id)
-        # Reuse when the transcript is unchanged, being careful about LLM mode:
-        #   - a cached LLM result satisfies ANY request — we never throw away a
-        #     forest just because the toggle is off, so flipping LLM off/on never
-        #     re-runs a session already analysed with the LLM;
-        #   - a cached structural-only result satisfies only a no-LLM request; if
-        #     the caller now wants the LLM, we fall through and UPGRADE it.
         if not force and cached and cached.get("sig") == sig:
             cached_llm = bool(cached.get("llm"))
             if cached_llm or not use_llm:
                 analyses.append(analysis_from_dict(cached["analysis"]))
                 reused += 1
                 continue
+        to_analyze.append((session_id, path, project, sig))
 
-        # Build the LLM client once, lazily, only when there's real work to do.
-        if use_llm and not client_tried:
+    # --- Phase 2: (re)analyse the rest, with the judge calls run CONCURRENTLY ---
+    # The per-session LLM judge is a network call, so a big-repo run is dominated by
+    # waiting on I/O. A thread pool turns an N×~5s sequential crawl into ~N/workers,
+    # which is the difference between ~73 min and a few minutes on an 860-session repo.
+    # We also CHECKPOINT the cache every few completions so a long run's progress
+    # survives an interruption — the old code saved only once, at the very end.
+    if to_analyze:
+        if use_llm:
             client_tried = True
             try:
                 client = sa.make_llm_client(base_url)
             except Exception as e:
                 client = None      # degrade to structural-only, like the CLI does
                 client_error = str(e)
-                # Loud, not silent: the old code swallowed this entirely.
                 print(f"  [LLM] could not build client — running structural-only: {e}",
                       flush=True)
 
-        a = sa.analyze_session(session_id, path, project, alpha=alpha,
-                               client=client, model=model)
-        # Track what the judge actually did, so the end-of-run verdict can tell the
-        # user whether the LLM was really used (client present is not enough — the
-        # endpoint/model can still reject every call).
-        if client is not None:
-            if a.llm_error and first_judge_error is None:
-                first_judge_error = a.llm_error
-            if a.llm_error:
-                judge_errors += 1
-                print(f"  [LLM] judge error on {session_id[:8]}: {a.llm_error}",
-                      flush=True)
-            elif a.task_forest:
-                llm_judged += 1
-        # Mark the entry as an LLM result if the client was present AND the judge
-        # didn't error. Sessions too short to judge still count as "done in LLM mode"
-        # (a.llm_ok stays True), so they are reused — not re-run every refresh. Only a
-        # genuine judge failure (endpoint down) leaves llm_ok False, so that session is
-        # retried on the next healthy refresh instead of stored as an empty result.
-        got_llm = client is not None and a.llm_ok
-        entries[session_id] = {
-            "sig": sig,
-            "llm": got_llm,
-            "analysis": analysis_to_dict(a),
-        }
-        analyses.append(a)
-        analyzed += 1
-        if progress:
-            progress(session_id, analyzed)
+        def _run(item):
+            session_id, path, project, sig = item
+            a = sa.analyze_session(session_id, path, project, alpha=alpha,
+                                   client=client, model=model)
+            return item, a
+
+        # Only fan out when the LLM (the slow, I/O-bound part) is in play; structural
+        # analysis is CPU-bound and already fast, so a single worker keeps it simple.
+        workers = max(1, max_workers) if client is not None else 1
+
+        # Results are consumed on THIS thread (as_completed), so the cache dict, the
+        # counters and `analyses` are only ever mutated single-threaded — no locks
+        # needed. Worker threads only read transcripts and call the (thread-safe) client.
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        since_save = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_run, item) for item in to_analyze]
+            for fut in as_completed(futures):
+                (session_id, path, project, sig), a = fut.result()
+                # Track what the judge actually did, so the end-of-run verdict can tell
+                # the user whether the LLM was really used (a present client is not
+                # enough — the endpoint/model can still reject calls).
+                if client is not None:
+                    if a.llm_error and first_judge_error is None:
+                        first_judge_error = a.llm_error
+                    if a.llm_error:
+                        judge_errors += 1
+                        print(f"  [LLM] judge error on {session_id[:8]}: {a.llm_error}",
+                              flush=True)
+                    elif a.task_forest:
+                        llm_judged += 1
+                # Mark the entry as an LLM result only if the client was present AND the
+                # judge didn't error. Sessions too short to judge keep llm_ok True, so
+                # they're reused; a genuine judge failure leaves llm_ok False so that
+                # session is retried next healthy refresh, not stored as an empty result.
+                got_llm = client is not None and a.llm_ok
+                entries[session_id] = {
+                    "sig": sig,
+                    "llm": got_llm,
+                    "analysis": analysis_to_dict(a),
+                }
+                analyses.append(a)
+                analyzed += 1
+                since_save += 1
+                if progress:
+                    progress(session_id, analyzed)
+                if since_save >= 25:      # checkpoint so a long run isn't all-or-nothing
+                    save_cache(cache, cache_path)
+                    since_save = 0
 
     save_cache(cache, cache_path)
 
@@ -276,14 +322,22 @@ def analyze_all(projects_dir=sa.DEFAULT_PROJECTS_DIR, project_filter=None,
     elif client is None:
         llm_active = False
         llm_status = "off (no client)"
-    elif judge_errors:
+    elif judge_errors and not llm_judged:
+        # EVERY judge call errored and none succeeded → the LLM genuinely isn't working.
+        # This is the case that usually IS a key/base_url/model problem.
         llm_active = False
-        llm_status = (f"FAILING — {judge_errors} judge call(s) errored "
+        llm_status = (f"FAILING — all {judge_errors} judge call(s) errored "
                       f"(first: {first_judge_error}). "
                       "Check the API key, base_url and model name for your endpoint.")
     elif llm_judged:
+        # The LLM worked. Some big sessions may still have errored (e.g. a response too
+        # long to fit the token budget) — note that, but don't call the whole run failed.
         llm_active = True
-        llm_status = f"ACTIVE — {llm_judged} session(s) judged this run"
+        if judge_errors:
+            llm_status = (f"ACTIVE — {llm_judged} session(s) judged; "
+                          f"{judge_errors} errored (first: {first_judge_error})")
+        else:
+            llm_status = f"ACTIVE — {llm_judged} session(s) judged this run"
     else:
         llm_active = True
         llm_status = ("enabled, but no session this run needed a judge call "

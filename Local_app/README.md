@@ -65,7 +65,7 @@ graph** button that opens a chart of the modelled context growth with the task b
 split points marked, so you can see where the switches and sub-agents fall.
 
 ```bash
-pip install ".[web]"      # FastAPI + uvicorn + the LLM extra
+pip install ".[web]"      # FastAPI + uvicorn + the LLM + SWE-chat extras
 split-advisor serve       # -> http://127.0.0.1:8000  (Ctrl-C to stop)
 # or, without installing:  python split_advisor.py serve --port 8000
 ```
@@ -137,8 +137,18 @@ cp .env.example .env
 ```
 
 Installing the `llm` or `web` extra pulls in `python-dotenv`, so `.env` works out of the
-box. (If you'd rather, exporting the same variables in your shell also works and takes
-precedence over the file.)
+box. The `web` extra also includes the SWE-chat reader dependencies, so the dashboard can
+switch between local Claude transcripts and SWE-chat dataset sessions. (If you'd rather,
+exporting the same variables in your shell also works and takes precedence over the file.)
+
+To point the app at SWE-chat, run:
+
+```bash
+split-advisor --source swe-chat --project owner/repo
+split-advisor serve --source swe-chat --project owner/repo
+```
+
+The `--project` filter matches the SWE-chat `repo_id` substring in this mode.
 
 **No key?** Run `split-advisor --no-llm` (or just leave it unset): you still get the full
 structural analysis — only the task forest and summaries are omitted. If a key is set but

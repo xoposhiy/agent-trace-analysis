@@ -17,6 +17,21 @@
     <div class="toolbar">
       <button id="refresh" class="refresh">Refresh</button>
       <label><input type="checkbox" id="useLlm" checked /> Use LLM (task forest)</label>
+      <label class="src-group">
+        <span>Source</span>
+        <select id="sourceSelect">
+          <option value="local">Local traces</option>
+          <option value="swe-chat">SWE-chat repo</option>
+        </select>
+      </label>
+      <label class="src-group source-only swe-chat-only" id="repoGroup">
+        <span>Repo filter</span>
+        <input id="repoFilter" type="text" value="entireio/cli" />
+      </label>
+      <label class="src-group source-only swe-chat-only" id="splitGroup">
+        <span>Split</span>
+        <input id="datasetSplit" type="text" value="train" />
+      </label>
       <span id="status" class="status"></span>
     </div>
 

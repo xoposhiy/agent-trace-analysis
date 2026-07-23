@@ -11,6 +11,15 @@ it still runs fully offline (structural heuristics only).
 
 ## Main ideas
 
+**Two data sources: local transcripts and the SWE-chat dataset.** The same analysis
+runs against either your own local Claude Code transcripts (the default) or sessions from
+the public **SWE-chat** Hugging Face dataset (`--source swe-chat --project owner/repo`, in
+both the CLI and the dashboard). SWE-chat sessions are materialised into the same
+Claude-like JSONL event stream the rest of the pipeline expects, so nothing downstream
+changes. The dataset is **multi-agent**, so only sessions whose `agent` is **Claude Code**
+are analysed (the cost model and transcript shape are Claude-specific); other agents
+(OpenCode, Codex, Gemini CLI, …) are skipped. 
+
 **User prompt vs agent step.** A *user prompt* is one prompt you typed (the SWE-chat
 paper's "prompt"); an *agent step* is one assistant step — a tool call or reply — after a
 prompt. One user prompt spans many agent steps (which together make up the paper's "turn",
@@ -86,13 +95,17 @@ key set elsewhere.
   plan-mode opportunities), colored task-forest strips and phase bars, live thresholds, and
   a per-session graph of the context ramp with the task bands and split points marked.
 - **`main.py`** — a separate legacy script that ran the original task-switch analysis over
-  the SWE-chat dataset; reuses `session_core` but is not part of the app.
+  the SWE-chat dataset; reuses `session_core` but is not part of the app. (The app now
+  reads SWE-chat directly via `split_advisor.py` / `analysis_api.py`, so this is historical.)
 
 ## Next steps
 
-- **Validate on SWE-chat, one repo.** Run the analysis over the sessions of a single
-  repository in the SWE-chat dataset to check the forest segmentation and the modelled
-  savings against real, varied traces at scale.
+- **✅ Validate on SWE-chat, one repo — done.** The app now reads SWE-chat sessions
+  end-to-end (`--source swe-chat --project owner/repo`, CLI + dashboard), with and without
+  the LLM, from small repos up to the largest (`entireio/cli`, ~870 sessions). Judge calls
+  run concurrently and the cache is checkpointed, so even the biggest repos analyse in
+  minutes; genuinely enormous sessions (hundreds of user prompts) fall back to structural
+  analysis instead of failing.
 - **Find the best-fit client.** Identify which kind of repository / workflow benefits most
   from the tool — the ideal use case where splitting, sub-agents, and plan mode save the
   most — so we know who it's for.

@@ -13,6 +13,10 @@ const byId = (elementId) => document.getElementById(elementId);
 const fmtMoney = (dollars) => "$" + (dollars || 0).toFixed(2);
 const fmtTokens = (tokens) => (tokens ? Math.round(tokens / 1000) + "k" : "—");
 
+const DEFAULT_SWECHAT_REPO = "SALT-NLP/SWE-chat";
+const DEFAULT_SWECHAT_SPLIT = "train";
+const DEFAULT_SWECHAT_REPO_FILTER = "entireio/cli";
+
 // Map a candidate `source` to a friendly badge label + CSS class, so the
 // task-switch vs sub-agent classification is explicit on every split point.
 const SOURCE_BADGES = {
@@ -379,6 +383,13 @@ function populateProjectFilter() {
   select.value = current;
 }
 
+function updateSourceControls() {
+  const source = byId("sourceSelect").value;
+  document.querySelectorAll(".swe-chat-only").forEach((node) => {
+    node.hidden = source !== "swe-chat";
+  });
+}
+
 // ---- server calls ----
 async function loadCachedSessions() {
   const response = await fetch("/api/sessions");
@@ -393,9 +404,19 @@ async function refreshSessions() {
   const button = byId("refresh");
   button.disabled = true;
   const useLlm = byId("useLlm").checked;
+  const source = byId("sourceSelect").value;
+  const repoFilter = byId("repoFilter").value.trim() || DEFAULT_SWECHAT_REPO_FILTER;
+  const datasetSplit = byId("datasetSplit").value.trim() || DEFAULT_SWECHAT_SPLIT;
   byId("status").textContent = "Analysing new / changed sessions… (first run can take a minute)";
   try {
-    const response = await fetch(`/api/refresh?use_llm=${useLlm}`, { method: "POST" });
+    const params = new URLSearchParams({
+      use_llm: String(useLlm),
+      source,
+      dataset_repo: DEFAULT_SWECHAT_REPO,
+      dataset_split: datasetSplit,
+      project_filter: source === 'swe-chat' ? repoFilter : "",
+    });
+    const response = await fetch(`/api/refresh?${params.toString()}`, { method: "POST" });
     const data = await response.json();
     allSessions = data.sessions || [];
     populateProjectFilter();
@@ -607,6 +628,8 @@ function closeModal() { byId("modal").hidden = true; }
 // (the "Use LLM" checkbox is read at refresh time, so it needs no live listener)
 byId("refresh").addEventListener("click", refreshSessions);
 ["fProject", "fSort", "fPct", "fDollars"].forEach((id) => byId(id).addEventListener("input", render));
+byId("sourceSelect").addEventListener("change", updateSourceControls);
+updateSourceControls();
 
 // tab switching
 document.querySelectorAll(".tab").forEach((tab) => {

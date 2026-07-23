@@ -153,7 +153,10 @@ def build_task_forest_prompt(prompt_texts):
         '"summary": "<one short, concrete sentence naming the session\'s overall '
         'work>"}\n\n'
         '"assignments" MUST have exactly one id per message, in the same order and '
-        "length as the numbered list above, and every id must appear in \"tasks\"."
+        "length as the numbered list above, and every id must appear in \"tasks\".\n\n"
+        "Output MINIFIED JSON: a single line, no spaces, no newlines, no markdown "
+        "fences. Keep every \"label\" to at most 5 words. (This keeps the response "
+        "small enough not to be truncated on long sessions.)"
     )
 
 
@@ -377,7 +380,23 @@ def session_token_buckets(events):
     Sum a session's real billed token buckets from the per-turn usage blocks,
     plus count the API calls (assistant turns with usage). Returns
     (input_tok, output_tok, cache_write_tok, cache_read_tok, api_calls).
+
+    If the event stream carries an authoritative `usage_totals` event, trust it
+    verbatim instead of summing per-turn usage. Some datasets (e.g. SWE-chat) only
+    populate reliable token/cost aggregates at the SESSION level — their per-turn
+    rows undercount the real totals by 10-100x — so the transcript writer injects
+    the session-level totals as one such event.
     """
+    for event in events:
+        if event.get("type") == "usage_totals":
+            return (
+                int(event.get("input_tokens", 0) or 0),
+                int(event.get("output_tokens", 0) or 0),
+                int(event.get("cache_creation_input_tokens", 0) or 0),
+                int(event.get("cache_read_input_tokens", 0) or 0),
+                int(event.get("api_calls", 0) or 0),
+            )
+
     input_tok = output_tok = cache_write_tok = cache_read_tok = 0
     api_calls = 0
     for event in events:

@@ -17,7 +17,10 @@ dependencies = []
 # provider settings live in a project .env instead of shell exports (optional).
 llm = ["openai>=1.0", "python-dotenv>=1.0"]
 # The local web dashboard (`split-advisor serve`): FastAPI app + the LLM extra.
-web = ["fastapi>=0.100", "uvicorn>=0.20", "openai>=1.0", "python-dotenv>=1.0"]
+web = ["fastapi>=0.100", "uvicorn>=0.20", "openai>=1.0", "python-dotenv>=1.0",
+	"datasets>=2.0", "huggingface_hub>=0.20"]
+# Optional extras for the SWE-chat dataset path used by `main.py` and the app.
+swechat = ["datasets>=2.0", "huggingface_hub>=0.20"]
 
 [project.scripts]
 # Installs a `split-advisor` command on PATH that works from any directory.
