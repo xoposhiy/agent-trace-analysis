@@ -1,0 +1,12 @@
+# Local environment / secrets — never commit the real .env
+.env
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated analysis reports (regenerable output; contain your session summaries)
+split_report.md
+split_advisor_report.md
+session_analysis_report.md

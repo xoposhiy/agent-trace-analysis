@@ -1,0 +1,290 @@
+/* Claude Split Advisor dashboard — self-contained styling.
+   Colours use the validated data-viz reference palette (8 categorical hues,
+   fixed order) so task colours are colourblind-safe; light + dark are both
+   defined explicitly (dark is stepped for the dark surface, not an auto-flip). */
+
+:root {
+  color-scheme: light;
+  --surface-1:      #fcfcfb;   /* card surface */
+  --page:           #f9f9f7;   /* page plane   */
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --muted:          #898781;
+  --gridline:       #e1e0d9;
+  --border:         rgba(11,11,11,0.10);
+  --good:           #006300;
+
+  /* categorical slots — colour by task identity (fixed order, never cycled) */
+  --series-1: #2a78d6;  /* blue    */
+  --series-2: #008300;  /* green   */
+  --series-3: #e87ba4;  /* magenta */
+  --series-4: #eda100;  /* yellow  */
+  --series-5: #1baf7a;  /* aqua    */
+  --series-6: #eb6834;  /* orange  */
+  --series-7: #4a3aa7;  /* violet  */
+  --series-8: #e34948;  /* red     */
+  --series-other: #898781;  /* 9th+ task folds to "Other" */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --muted:          #898781;
+    --gridline:       #2c2c2a;
+    --border:         rgba(255,255,255,0.10);
+    --good:           #0ca30c;
+    --series-1: #3987e5;
+    --series-2: #008300;
+    --series-3: #d55181;
+    --series-4: #c98500;
+    --series-5: #199e70;
+    --series-6: #d95926;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --series-other: #898781;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 64px; }
+
+header h1 { font-size: 20px; margin: 0 0 2px; }
+header p  { margin: 0 0 8px; color: var(--text-secondary); }
+header p.note {
+  margin: 0 0 20px; font-size: 12px; color: var(--muted);
+  border-left: 2px solid var(--gridline); padding-left: 10px;
+}
+
+/* ---- top control bar ---- */
+.toolbar {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  margin-bottom: 16px;
+}
+.src-group {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--text-secondary);
+}
+.src-group span { font-size: 12px; color: var(--muted); }
+.src-group select, .src-group input {
+  padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); min-width: 150px;
+}
+.source-only[hidden] { display: none !important; }
+button.refresh {
+  background: var(--series-1); color: #fff; border: 0; border-radius: 8px;
+  padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+button.refresh:disabled { opacity: 0.6; cursor: default; }
+.toolbar label { color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
+.status { color: var(--text-secondary); font-size: 13px; }
+
+/* LLM diagnostics banner (set after each refresh) */
+.llm-banner {
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;
+  font-size: 13px; line-height: 1.5; border: 1px solid var(--border);
+}
+.llm-banner.ok  { color: var(--good); border-color: var(--good); background: rgba(0,131,0,0.06); }
+.llm-banner.bad { color: var(--series-8); border-color: var(--series-8); background: rgba(227,73,72,0.07); }
+.llm-banner.off { color: var(--text-secondary); background: var(--surface-1); }
+
+/* ---- stat tiles ---- */
+.tiles { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.tile {
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; min-width: 150px; flex: 1;
+}
+.tile .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.tile .v { font-size: 22px; font-weight: 650; margin-top: 2px; }
+.tile .v.good { color: var(--good); }
+
+/* ---- filters ---- */
+.filters {
+  display: flex; flex-wrap: wrap; gap: 20px; align-items: center;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; margin-bottom: 20px;
+}
+.filters .f { display: flex; flex-direction: column; gap: 2px; }
+.filters .f .lbl { font-size: 12px; color: var(--muted); }
+.filters input[type=range] { width: 160px; accent-color: var(--series-1); }
+.filters select { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); }
+
+/* ---- tabs (semantic splits vs plan-mode) ---- */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+.tab {
+  background: none; border: 0; padding: 9px 14px; font-size: 14px; cursor: pointer;
+  color: var(--text-secondary); border-bottom: 2px solid transparent;
+}
+.tab.active { color: var(--text-primary); font-weight: 600; border-bottom-color: var(--series-1); }
+
+/* ---- session cards ---- */
+.card {
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; margin-bottom: 14px;
+}
+.card .row1 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.card .sid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; }
+.card .proj { color: var(--muted); font-size: 12px; }
+.card .save {
+  margin-left: auto; font-weight: 700; color: var(--good);
+  font-variant-numeric: tabular-nums;
+}
+.graph-btn {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 10px; font-size: 12px; color: var(--text-secondary); cursor: pointer;
+}
+.graph-btn:hover { color: var(--text-primary); border-color: var(--series-1); }
+.card .summary { color: var(--text-secondary); margin: 6px 0 12px; }
+
+/* ---- the task-forest timeline strip (categorical stacked bar) ---- */
+.strip { display: flex; width: 100%; height: 30px; border-radius: 6px; overflow: hidden;
+  background: var(--gridline); gap: 2px; }   /* gap = 2px surface spacer between fills */
+.seg {
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11px; font-weight: 700; min-width: 14px;
+  overflow: hidden; white-space: nowrap; cursor: default;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0 4px; }
+.legend .item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--text-secondary); }
+.legend .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.legend .item.child { margin-left: 14px; font-size: 11px; opacity: 0.9; }
+.legend .item.child::before { content: "↳"; color: var(--muted); margin-right: 2px; }
+
+/* ---- interactive task tree (top-level task rows, expandable to sub-tasks) ---- */
+.task-tree { margin: 10px 0 4px; }
+.task-tree .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.tt-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+  font-size: 13px; color: var(--text-secondary); }
+.tt-row b { color: var(--text-primary); }
+.tt-row.tt-expandable { cursor: pointer; }
+.tt-row.tt-expandable:hover { background: var(--gridline); }
+.tt-caret { width: 10px; flex: none; color: var(--muted); font-size: 10px;
+  transition: transform 0.12s ease; }
+.tt-row.open .tt-caret { transform: rotate(90deg); }
+.tt-caret.tt-none { visibility: hidden; }
+.tt-label { color: var(--text-secondary); }
+.tt-count { margin-left: auto; flex: none; color: var(--muted); font-size: 11px; }
+.tt-children { margin: 2px 0 6px 26px; display: flex; flex-direction: column; gap: 3px;
+  border-left: 1px solid var(--border); padding-left: 12px; }
+/* the `display:flex` above beats the UA `[hidden]{display:none}`, so restate it */
+.tt-children[hidden] { display: none; }
+.tt-child { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-secondary); }
+.tt-child b { color: var(--text-primary); }
+
+/* ---- plan-mode phase bar (reading / editing / running over turns) ---- */
+.phasebar {
+  position: relative; height: 30px; border-radius: 6px; overflow: hidden;
+  background: var(--gridline); margin-top: 4px;
+}
+.phase-seg {
+  position: absolute; top: 0; height: 100%; display: flex; align-items: center;
+  justify-content: center; color: #fff; font-size: 10px; font-weight: 700;
+  overflow: hidden; white-space: nowrap;
+}
+
+.badges { margin: 10px 0 0; }
+.badge {
+  display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 9px;
+  border-radius: 999px; margin-right: 8px;
+}
+.badge.interleave { background: rgba(227,73,72,0.14); color: var(--series-8); }
+/* split-point type badges — task switch vs sub-agent vs plan-mode */
+.badge.k-switch   { background: rgba(42,120,214,0.15); color: var(--series-1); }
+.badge.k-subagent { background: rgba(235,104,52,0.15); color: var(--series-6); }
+.badge.k-plan     { background: rgba(74,58,167,0.15);  color: var(--series-7); }
+.badge.k-other    { background: rgba(137,135,129,0.18); color: var(--muted); }
+
+/* the list of classified split points on each card */
+.splitpoints { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.sp-h { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+.sp { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 13px;
+  border-radius: 6px; border: 1px solid transparent; }
+.sp[data-idx] { cursor: pointer; }
+.sp[data-idx]:hover { background: var(--gridline); }
+.sp.selected { background: var(--gridline); border-color: var(--series-1); }
+.sp .badge { flex: none; }
+.sp-hint { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
+.sp-label { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-save { margin-left: auto; flex: none; color: var(--good); font-weight: 600;
+  font-variant-numeric: tabular-nums; }
+
+.meta { color: var(--text-secondary); font-size: 13px; margin-top: 10px; }
+.meta .k-split { color: var(--good); font-weight: 600; }
+
+/* ---- best-split preview (the whiteboard-sketch visual) ---- */
+.best-split-h {
+  margin-top: 14px; font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.best-split-h .bs-label { text-transform: none; letter-spacing: 0; color: var(--text-secondary); }
+.split-preview { position: relative; margin: 8px 0 2px; }
+/* the pieces (full bar on top, chunk bars below) are flex rows of colored slices */
+.pv-full, .pv-bar { display: flex; height: 20px; border-radius: 5px; overflow: hidden;
+  background: var(--gridline); gap: 1px; }
+.pv-full { height: 22px; position: relative; }
+/* sub-agent: outline the segment being lifted out, on the full bar */
+.pv-brace { position: absolute; top: -2px; bottom: -2px; border: 2px solid var(--series-6);
+  border-radius: 5px; pointer-events: none; }
+/* the excised segment shown offset below, as its own isolated sub-agent run */
+.pv-subrow { margin-top: 2px; }
+.pv-bar.pv-sub { outline: 1.5px dashed var(--series-6); outline-offset: 1px; }
+.pv-seg { min-width: 2px; }
+.pv-arrow-row { position: relative; height: 18px; }
+.pv-arrow { position: absolute; transform: translateX(-50%); color: var(--muted);
+  font-size: 15px; line-height: 18px; }
+.pv-chunks { display: flex; flex-direction: column; gap: 6px; }
+.pv-row { display: flex; align-items: center; gap: 3px; min-width: 40px; }
+.pv-row .pv-bar { flex: 1; }
+/* the small grey block = the summary carried into the next session */
+.pv-summary { flex: none; width: 14px; height: 20px; border-radius: 3px;
+  background: var(--muted); opacity: 0.55; }
+.pv-save { margin-top: 8px; color: var(--good); font-weight: 700;
+  font-variant-numeric: tabular-nums; font-size: 14px; }
+.pv-cap { margin-top: 3px; color: var(--muted); font-size: 12px; }
+ul.tangents { margin: 8px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
+
+.empty { color: var(--muted); text-align: center; padding: 48px 0; }
+.tip { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+/* ---- per-session graph modal ---- */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50; padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal-overlay[hidden] { display: none; }   /* beats the display:flex above */
+.modal-panel {
+  position: relative; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 20px 22px; width: 100%; max-width: 820px;
+  max-height: 90vh; overflow: auto;
+}
+.modal-close {
+  position: absolute; top: 8px; right: 12px; background: none; border: 0;
+  font-size: 22px; line-height: 1; color: var(--muted); cursor: pointer;
+}
+.modal-title { font-size: 14px; color: var(--text-primary); margin-bottom: 10px; }
+
+/* the SVG chart inside the modal */
+.graph { width: 100%; height: auto; margin: 6px 0 4px; }
+.graph .axis { stroke: var(--muted); stroke-width: 1; }
+.graph .ramp { fill: none; stroke: var(--series-1); stroke-width: 2; }
+.graph .marker { stroke-width: 1.5; stroke-dasharray: 4 3; }
+.graph .tick, .graph .axlabel { fill: var(--muted); font-size: 11px; }
+.graph .bandlabel { fill: #fff; font-size: 10px; font-weight: 700; }
+.graph .markerlbl { font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }

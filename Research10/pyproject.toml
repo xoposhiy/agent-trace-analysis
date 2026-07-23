@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-split-advisor"
+version = "0.1.0"
+description = "Scan your local Claude Code sessions and suggest worthwhile semantic splits (cost-saving)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+# The default (heuristic) path is pure-stdlib: no runtime dependencies.
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed for the opt-in LLM task-switch judge (`split-advisor --llm`).
+llm = ["openai>=1.0"]
+
+[project.scripts]
+# Installs a `split-advisor` command on PATH that works from any directory.
+split-advisor = "split_advisor:main"
+
+[tool.setuptools]
+# Flat layout: three self-contained runtime modules (main.py is the research/
+# dataset script and is intentionally NOT packaged — it needs datasets/hf).
+py-modules = ["split_advisor", "session_core", "chunk_split_model"]
