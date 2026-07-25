@@ -19,37 +19,53 @@ Symptoms detected:
                                 (excludes normal TDD red-green iteration)
     scope_files_too_many      — too many files changed in one session (metadata-only)
     scope_turns_too_long      — session ran for an unusually large number of turns (metadata-only)
-    no_verification_by_user   — positive evidence the user did NOT verify the fix
-                                (not just "transcript doesn't show verification")
+
+    (no_verification_by_user was removed — see CHANGELOG)
 
 CHANGELOG (this revision):
-    - All symptom definitions rewritten with explicit exclusions + few-shot
-      examples (see FEW_SHOT_EXAMPLES) to reduce false positives, especially
-      "explain this" / pure Q&A turns getting flagged as no_spec /
-      no_acceptance_criteria / no_closed_loop.
-    - Added a cheap heuristic pre-classifier (classify_intent) that tags each
-      user message as change_request / question / ambiguous. This tag is shown
-      to the judge, AND used as a deterministic post-filter: if a session has
-      zero change-request turns, the four "request quality" symptoms are
-      forced to False regardless of what the judge says (defense in depth).
-    - Thinking capture no longer pre-filters by hedge keywords or truncates to
-      150 chars / 3 snippets. ALL thinking blocks are now passed to the judge
-      in full (see MAX_THINKING_CHARS_PER_BLOCK / MAX_TOTAL_THINKING_CHARS for
-      the only caps that remain, which exist purely to keep a single
-      pathological session from blowing up the prompt size — they are far
-      above normal thinking length and are NOT keyword-based).
-    - Fixed tool_result content parsing: previously did str(list-of-dicts)
-      on structured content blocks, which stringified the Python repr instead
-      of the actual text. Now properly extracts "text" fields from list-typed
-      content before checking for pass/fail markers.
-    - Test command / result capture windows widened (120->400, 300->600 chars)
-      since real test output/commands were getting cut before the pass/fail
-      markers appeared.
-    - Transcript files are now read with explicit encoding="utf-8",
-      errors="replace" so odd bytes don't silently drop or crash a line.
-    - After each run, a markdown report is regenerated with a per-symptom
-      "Examples" section populated from real evidence_samples collected
-      during that run (not placeholder text).
+    - REMOVED no_verification_by_user entirely. It was flagged as unreliable
+      (mostly detecting "no proof shown in chat" rather than "user actually
+      skipped verifying") and we're not attempting to fix it right now — it's
+      gone from definitions, the judge calls, the report, and the counts.
+    - Judge calls are now STRUCTURED OUTPUT instead of free-text-JSON that we
+      manually strip and json.loads(). Each call uses response_format with a
+      JSON schema whose first field is "reasoning" (a string), followed by
+      "applicable", "present", "evidence". Putting "reasoning" first in the
+      schema gives the model room to think through the evidence before it
+      has to commit to the boolean — plain "return only JSON" prompting was
+      squeezing out any deliberation. Falls back to the old manual-parse
+      approach if the proxy/model rejects response_format (see
+      judge_one_symptom).
+    - Symptom definitions now sit at the very top of each call's *user*
+      message (defs + few-shot examples first, trace referenced second),
+      per the request to put definitions "at the top of the prompt."
+    - ONE SEPARATE JUDGE CALL PER SYMPTOM instead of one call judging all
+      symptoms at once. Each call gets: this one symptom's definition +
+      examples, plus the full session trace. The trace itself (large, and
+      identical across a given session's 5 calls) is sent as the SYSTEM
+      message with an (attempted) prompt-cache breakpoint, since it's the
+      expensive, repeated part; the symptom-specific instruction (small,
+      varies per call) is the user message. This is a best-effort attempt at
+      cache-prefix reuse — see build_shared_context()/CACHE_CONTROL comments,
+      since whether the underlying proxy actually honors the cache_control
+      hint depends on your LiteLLM setup and isn't guaranteed by this code.
+    - Chronological, INTERLEAVED transcript: previously user messages and
+      agent thinking were shown to the judge in two separate blocks, so the
+      judge had no way to know which thinking happened between which two
+      user messages. build_case_file now builds a single "timeline" in
+      strict event order (user message / thinking block / test command, as
+      they actually occurred) and that's what gets rendered into the prompt.
+    - All prior fixes retained: full unfiltered thinking capture (size-capped
+      only as a safety valve, not by keyword), fixed tool_result content
+      parsing (was stringifying the Python repr of list-typed content),
+      wider test command/result capture windows, explicit utf-8 transcript
+      reading, auto-regenerated report with real examples.
+
+COST NOTE: this revision makes 5 LLM calls per session instead of 1 (one per
+remaining symptom). That's a 5x increase in judge API calls versus the prior
+version. Prompt caching (if your proxy honors it) should absorb most of the
+added *token* cost since the large shared trace is reused across the 5 calls,
+but it is still 5x the request count / latency. Consider SAMPLE for testing.
 
 Requirements: pip install datasets huggingface_hub openai
 Dataset is gated: accept terms on huggingface.co and run `hf auth login` first.
@@ -70,7 +86,7 @@ JUDGE_MODEL = "anthropic/claude-haiku-4-5"
 LITELLM_BASE_URL = "https://litellm.labs.jb.gg"
 REPORT_OUTPUT_PATH = "vibe_fixing_report.md"
 
-SAMPLE = None   # None = run on every parseable session
+SAMPLE = 20   # None = run on every parseable session
 
 SCOPE_FILES_TOO_MANY_THRESHOLD = 8
 SCOPE_TURNS_TOO_LONG_THRESHOLD = 150
@@ -88,6 +104,29 @@ MAX_USER_MESSAGE_CHARS = 2000
 TEST_KEYWORDS = ("test", "pytest", "jest", "npm run", "go test", "cargo test", "rspec")
 FAIL_MARKERS = ("fail", "error", "traceback", "exception", "not ok")
 PASS_MARKERS = ("pass", "ok", "success", "0 failing", "all tests passed")
+
+# Filenames that plausibly carry a spec/instructions even when the user's own
+# request is vague — e.g. the user says "add the endpoint" but AGENTS.md
+# already documents exactly how endpoints should be structured in this repo.
+# Heuristic on the filename only (case-insensitive substring match), not file
+# content — deliberately cheap, no extra LLM call. Extend this list if your
+# codebases use other conventions (e.g. .cursorrules, ARCHITECTURE.md).
+SPEC_FILE_PATTERNS = (
+    "agents.md", "claude.md", "spec.md", "specification.md", "design.md",
+    "requirements.md", "readme.md", "contributing.md", "architecture.md",
+    "cursorrules", ".cursorrules", "issue.md", "rfc",
+)
+
+# Whether to attempt OpenAI-style structured output (response_format with a
+# JSON schema). If the proxy/model rejects it, judge_one_symptom falls back
+# to the old "return only JSON" text prompting automatically per-call.
+USE_STRUCTURED_OUTPUT = True
+
+# Whether to attempt an Anthropic-style cache_control breakpoint on the
+# shared system-message trace. Best-effort: if your LiteLLM proxy doesn't
+# pass this through, it's simply ignored by the provider — harmless, just no
+# cache savings. Set to False if you'd rather not send the extra field at all.
+ATTEMPT_PROMPT_CACHING = True
 
 # Heuristic-only, used for the intent tag shown to the judge + the
 # deterministic post-filter. Not used to silently drop data — only to label it.
@@ -119,18 +158,28 @@ def classify_intent(text):
     return "ambiguous"
 
 
+# Each symptom now carries its own definition + its own short calibration
+# examples, since each is judged in its own isolated call.
 SYMPTOM_DEFINITIONS = {
     "no_spec": (
         "The user's request is vague/one-line ('change the button color', "
         "'replace the navigation bar with menu', 'add parameters to endpoint', "
         "'you are wrong') with no real spec, OR the agent's own thinking shows "
         "it is unsure or stuck but it submits an answer anyway as if everything "
-        "is fine. IMPORTANT EXCLUSION: this symptom is about the quality of a "
+        "is fine. IMPORTANT EXCLUSION #1: this symptom is about the quality of a "
         "REQUEST FOR A CHANGE. If the user is only asking a question, asking "
         "for an explanation, a code review, or a walkthrough — with no code "
-        "change requested at all — there is no 'spec' to be vague, so do NOT "
-        "flag this. A precise question ('what does this regex do?') is not "
-        "vague just because it's short."
+        "change requested at all — there is no 'spec' to be vague, so mark "
+        "applicable=false. A precise question ('what does this regex do?') is "
+        "not vague just because it's short. IMPORTANT EXCLUSION #2: if the "
+        "user's request is vague on its own BUT the agent read a spec-like "
+        "file in this session (see the 'SPEC-LIKE FILES THE AGENT READ' line) "
+        "that plausibly explains what the vague request means in this repo — "
+        "e.g. the user says 'add the endpoint' and the agent read AGENTS.md, "
+        "which documents this repo's exact endpoint conventions — then a real "
+        "spec effectively existed and was used, so mark present=false. Only "
+        "keep exclusion #2 if the file read is plausibly relevant to the "
+        "actual request, not just any doc the agent happened to open."
     ),
     "no_closed_loop": (
         "The request ('fix tests', 'app is not running', etc.) gives the agent "
@@ -138,100 +187,123 @@ SYMPTOM_DEFINITIONS = {
         "was run and no reproduction step was checked before/after the fix. "
         "IMPORTANT EXCLUSION: only applies when a FIX was actually requested "
         "and made. If the turn is a pure question/explanation with no change "
-        "made, or if the agent DID run a test/reproduction step and reported "
-        "the result, do NOT flag this."
+        "made, mark applicable=false. If the agent DID run a test/reproduction "
+        "step and reported the result, mark present=false."
     ),
     "no_acceptance_criteria": (
         "The request has a vague success bar with no concrete criteria — "
         "'make it faster', 'clean this up', 'don't change the format/API' — "
         "so 'done' is subjective. IMPORTANT EXCLUSION: only applies to "
-        "requests for a CHANGE. Do not flag pure questions ('how does the "
-        "caching layer work?'), and do not flag requests that already give a "
-        "concrete target ('get load time under 200ms', 'match this exact "
-        "screenshot')."
+        "requests for a CHANGE. Mark applicable=false for pure questions "
+        "('how does the caching layer work?'). Mark present=false for requests "
+        "that already give a concrete target ('get load time under 200ms', "
+        "'match this exact screenshot')."
     ),
     "no_visual_reference": (
         "The request is about visual/UI appearance ('make it look better', "
         "'match the design') but no actual image, mockup, or design file was "
         "ever provided anywhere in the conversation. IMPORTANT EXCLUSION: if "
         "the session has no visual/UI request at all (backend, CLI, data, "
-        "infra work), this symptom simply does not apply — answer false, not "
-        "true. Also do not flag if a screenshot/mockup/reference URL/design "
-        "file was provided at any point in the conversation, even if not in "
-        "the very first message."
+        "infra work), mark applicable=false. Also mark present=false if a "
+        "screenshot/mockup/reference URL/design file was provided at any "
+        "point in the conversation, even if not in the very first message."
     ),
     "repetitive_fix_attempts": (
         "The user reports the SAME underlying problem more than once because "
         "the agent's earlier fix didn't actually work — e.g. the user says "
         "'still broken', 'that didn't fix it', or re-describes the same bug "
         "after a fix was claimed complete. This is about the agent's fix being "
-        "wrong, not about normal engineering iteration. Do NOT flag: a "
-        "standard test-driven-development loop (write a test, run it, see it "
+        "wrong, not about normal engineering iteration. Mark present=false for: "
+        "a standard test-driven-development loop (write a test, run it, see it "
         "fail, fix the code, run it again, see it pass); a linter/build error "
         "being fixed and immediately re-checked; or a code reviewer requesting "
-        "sequential/different changes that get addressed one at a time. Those "
-        "are healthy iteration, not repeated wrong fixes on the SAME bug."
-    ),
-    "no_verification_by_user": (
-        "There is POSITIVE evidence the user did not verify the fix — e.g. the "
-        "user's very next message reports the SAME bug still happening after "
-        "being told it was fixed, or the user explicitly says they didn't test "
-        "it, or accepts a claim of success with visible skepticism/haste that "
-        "contradicts having actually checked ('ok whatever, ship it', 'sure, "
-        "I'll trust you'). Do NOT flag a session just because the transcript "
-        "itself doesn't show a test command or a screenshot — the user may "
-        "well have tested it outside the chat, and the absence of proof in "
-        "the transcript is not evidence of absence of verification. Only flag "
-        "when something in the conversation ACTIVELY suggests the user "
-        "skipped verifying, not merely that verification isn't visible."
+        "sequential/different changes addressed one at a time. This symptom is "
+        "always applicable (applicable=true) regardless of request type — "
+        "even a pure Q&A session could technically show a repeated wrong "
+        "'fix' if the agent kept giving corrected-but-still-wrong answers."
     ),
 }
 
-# Few-shot calibration examples shown directly in the judge prompt. Kept
-# short and generic (not tied to any real session) — purpose is to anchor
-# the model's threshold, especially for the pure-Q&A exclusion.
-FEW_SHOT_EXAMPLES = """
-CALIBRATION EXAMPLES (generic, not from this session — use only to calibrate
-your judgment, do not reference these in your evidence text):
+SYMPTOM_ORDER = list(SYMPTOM_DEFINITIONS)
+REQUEST_QUALITY_SYMPTOMS = ("no_spec", "no_closed_loop", "no_acceptance_criteria", "no_visual_reference")
 
-- no_spec:
-    FLAG: user says only "fix the button", agent proceeds with no clarifying
-    context and no spec ever emerges.
-    DO NOT FLAG: user asks "explain what this regex does" — this is a
-    question, not a change request, so vagueness-of-spec doesn't apply.
+# Few-shot calibration examples, per symptom, shown at the top of that
+# symptom's user message (ahead of the reference to the trace). Kept short
+# and generic (not tied to any real session).
+FEW_SHOT_EXAMPLES_BY_SYMPTOM = {
+    "no_spec": (
+        "FLAG: user says only \"fix the button\", agent proceeds with no "
+        "clarifying context and no spec ever emerges.\n"
+        "DO NOT FLAG (applicable=false): user asks \"explain what this regex "
+        "does\" — this is a question, not a change request.\n"
+        "DO NOT FLAG (present=false): user says \"add the endpoint\" (vague on "
+        "its own), but the agent reads AGENTS.md and it documents this repo's "
+        "exact endpoint conventions — a real spec existed and was used."
+    ),
+    "no_closed_loop": (
+        "FLAG: user says \"the API times out, fix it\"; agent edits code but "
+        "never runs the endpoint or a test to confirm the timeout is gone.\n"
+        "DO NOT FLAG (applicable=false): user asks \"why does the API time "
+        "out?\" (no fix requested). DO NOT FLAG (present=false): the agent "
+        "fixed it AND ran a reproduction step afterward."
+    ),
+    "no_acceptance_criteria": (
+        "FLAG: \"make this cleaner\" / \"optimize this\" with no definition of "
+        "clean or fast enough.\n"
+        "DO NOT FLAG (present=false): \"get load time under 200ms\" (concrete "
+        "target given). DO NOT FLAG (applicable=false): \"explain how the "
+        "caching layer works\" (a question, not a target-setting request)."
+    ),
+    "no_visual_reference": (
+        "FLAG: \"make the landing page look more modern\", no screenshot, "
+        "mockup, or reference site anywhere in the conversation.\n"
+        "DO NOT FLAG (present=false): user attaches a screenshot and says "
+        "\"match this\". DO NOT FLAG (applicable=false): the session is "
+        "backend/CLI work with no visual request at all."
+    ),
+    "repetitive_fix_attempts": (
+        "FLAG: user says \"still crashes on submit\" shortly after the agent "
+        "claimed the submit crash was fixed.\n"
+        "DO NOT FLAG (present=false): user writes a test, it fails, agent "
+        "fixes the code, test passes — one clean TDD cycle is not repetitive."
+    ),
+}
 
-- no_closed_loop:
-    FLAG: user says "the API times out, fix it"; agent edits code but never
-    runs the endpoint or a test to confirm the timeout is gone.
-    DO NOT FLAG: user asks "why does the API time out?" (no fix requested,
-    nothing to close the loop on) — or the agent fixed it AND ran a
-    reproduction step afterward.
-
-- no_acceptance_criteria:
-    FLAG: "make this cleaner" / "optimize this" with no definition of clean
-    or fast enough.
-    DO NOT FLAG: "get load time under 200ms" (concrete target given), or
-    "explain how the caching layer works" (a question, not a target-setting
-    request).
-
-- no_visual_reference:
-    FLAG: "make the landing page look more modern", no screenshot, mockup,
-    or reference site anywhere in the conversation.
-    DO NOT FLAG: user attaches a screenshot and says "match this" — or the
-    session is backend/CLI work with no visual request at all.
-
-- repetitive_fix_attempts:
-    FLAG: user says "still crashes on submit" shortly after the agent claimed
-    the submit crash was fixed.
-    DO NOT FLAG: user writes a test, it fails, agent fixes the code, test
-    passes — one clean TDD cycle is not repetitive.
-
-- no_verification_by_user:
-    FLAG: user's next message says "didn't try it but sounds right, ship it",
-    or the same bug resurfaces right after being declared fixed.
-    DO NOT FLAG: the transcript just ends after the fix with no test shown —
-    that alone is not evidence the user skipped checking.
-"""
+# Structured-output JSON schema. "reasoning" is deliberately the FIRST
+# property: since JSON is generated field-by-field in declared order, this
+# gives the model space to think through the evidence before it has to
+# commit to "present". Plain "respond with only JSON" prompting was
+# squeezing out any deliberation entirely.
+SYMPTOM_JUDGMENT_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "symptom_judgment",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "reasoning": {
+                    "type": "string",
+                    "description": "Think step by step through the relevant evidence before deciding. This is scratch space, not the final answer.",
+                },
+                "applicable": {
+                    "type": "boolean",
+                    "description": "False only if this symptom conceptually cannot apply to this session (see the exclusion in the symptom definition). True otherwise.",
+                },
+                "present": {
+                    "type": "boolean",
+                    "description": "Whether the symptom is present in this session. Should be false whenever applicable is false.",
+                },
+                "evidence": {
+                    "type": "string",
+                    "description": "One short sentence pointing to the specific evidence for your answer.",
+                },
+            },
+            "required": ["reasoning", "applicable", "present", "evidence"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+}
 
 
 # ----------------------------------------------------------------------
@@ -278,10 +350,9 @@ def read_transcript(session_id, paths):
 
 def _extract_text_from_content(content):
     """Content on a tool_result / message block can be a plain string OR a
-    list of structured blocks like [{"type": "text", "text": "..."}]. The
-    previous version did str(content) on the list case, which stringified
-    the Python repr (braces, quotes, key names and all) instead of the
-    actual text — this fixes that."""
+    list of structured blocks like [{"type": "text", "text": "..."}]. Doing
+    str(content) on the list case stringifies the Python repr (braces,
+    quotes, key names and all) instead of the actual text — this avoids that."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -297,13 +368,22 @@ def _extract_text_from_content(content):
 
 
 def build_case_file(events):
-    user_messages = []       # [(turn_no, text, has_image, intent)]
+    """
+    Builds a condensed case file. The key structural piece is `timeline`:
+    a single list of entries in the STRICT order events actually occurred,
+    so the judge can tell which thinking happened between which two user
+    messages, rather than seeing "all messages" then "all thinking" as two
+    disconnected blocks.
+    """
+    timeline = []              # [{"kind": "user_message"/"thinking"/"test_command"/"spec_file_read", ...}] in strict order
+    user_messages = []         # [(text, has_image, intent)] — kept for post-filter convenience
     files_touched = set()
-    test_runs = []            # [{"command": str, "result": str|None, "id": tool_use_id}]
-    thinking_blocks = []      # [{"turn": int, "text": str}] — ALL thinking, unfiltered
-    turn_no = 0
+    files_read = set()
+    spec_files_read = set()     # subset of files_read matching SPEC_FILE_PATTERNS
+    test_runs = []              # [{"command": str, "result": str|None, "id": tool_use_id}]
     total_thinking_chars = 0
     thinking_truncated = False
+    turn_no = 0
 
     for event in events:
         etype = event.get("type")
@@ -321,7 +401,7 @@ def build_case_file(events):
                         thinking_text = b.get("thinking", "") or ""
                         if thinking_text and total_thinking_chars < MAX_TOTAL_THINKING_CHARS:
                             snippet = thinking_text[:MAX_THINKING_CHARS_PER_BLOCK]
-                            thinking_blocks.append({"turn": turn_no, "text": snippet})
+                            timeline.append({"kind": "thinking", "turn": turn_no, "text": snippet})
                             total_thinking_chars += len(snippet)
                         elif thinking_text:
                             thinking_truncated = True
@@ -329,18 +409,25 @@ def build_case_file(events):
                     if b.get("type") == "tool_use":
                         name = b.get("name", "")
                         tool_input = b.get("input", {}) or {}
-                        if any(k in name.lower() for k in ("edit", "write")) and "todowrite" not in name.lower():
+                        name_lower = name.lower()
+                        if any(k in name_lower for k in ("edit", "write")) and "todowrite" not in name_lower:
                             fp = tool_input.get("file_path")
                             if fp:
                                 files_touched.add(fp)
-                        if "bash" in name.lower():
+                        if any(k in name_lower for k in ("read", "grep", "glob")) and "todo" not in name_lower:
+                            fp = tool_input.get("file_path") or tool_input.get("path") or tool_input.get("pattern")
+                            if fp:
+                                files_read.add(fp)
+                                if any(pat in fp.lower() for pat in SPEC_FILE_PATTERNS):
+                                    if fp not in spec_files_read:
+                                        spec_files_read.add(fp)
+                                        timeline.append({"kind": "spec_file_read", "turn": turn_no, "file_path": fp})
+                        if "bash" in name_lower:
                             command = tool_input.get("command", "") or ""
                             if any(k in command.lower() for k in TEST_KEYWORDS):
-                                test_runs.append({
-                                    "command": command[:MAX_TEST_COMMAND_CHARS],
-                                    "result": None,
-                                    "id": b.get("id"),
-                                })
+                                trimmed = command[:MAX_TEST_COMMAND_CHARS]
+                                test_runs.append({"command": trimmed, "result": None, "id": b.get("id")})
+                                timeline.append({"kind": "test_command", "turn": turn_no, "command": trimmed})
 
         if etype == "user":
             has_image = False
@@ -354,7 +441,12 @@ def build_case_file(events):
                 text = ""
             if text:
                 intent = classify_intent(text)
-                user_messages.append((turn_no, text[:MAX_USER_MESSAGE_CHARS], has_image, intent))
+                trimmed_text = text[:MAX_USER_MESSAGE_CHARS]
+                user_messages.append((trimmed_text, has_image, intent))
+                timeline.append({
+                    "kind": "user_message", "turn": turn_no, "text": trimmed_text,
+                    "has_image": has_image, "intent": intent,
+                })
 
             if isinstance(content, list):
                 for b in content:
@@ -371,10 +463,12 @@ def build_case_file(events):
                                     tr["result"] = "unclear"
 
     return {
+        "timeline": timeline,
         "user_messages": user_messages,
         "files_touched": sorted(files_touched),
+        "files_read": sorted(files_read),
+        "spec_files_read": sorted(spec_files_read),
         "test_runs": test_runs,
-        "thinking_blocks": thinking_blocks,
         "thinking_truncated": thinking_truncated,
         "total_turns": turn_no,
     }
@@ -391,101 +485,159 @@ def compute_scope_flags(case_file):
 def session_has_change_request(case_file):
     """True if at least one user message reads as an actual request for a
     code change (not pure Q&A). Used as a deterministic post-filter safety
-    net for the four 'request quality' symptoms."""
-    return any(intent == "change_request" for _, _, _, intent in case_file["user_messages"])
+    net for the four 'request quality' symptoms, on top of the judge's own
+    'applicable' field."""
+    return any(intent == "change_request" for _, _, intent in case_file["user_messages"])
 
 
 # ----------------------------------------------------------------------
-# LLM-as-judge
+# LLM-as-judge — one call per symptom, shared cacheable trace + per-symptom prompt
 # ----------------------------------------------------------------------
 
-REQUEST_QUALITY_SYMPTOMS = ("no_spec", "no_closed_loop", "no_acceptance_criteria", "no_visual_reference")
+def render_timeline(case_file):
+    """Chronological, interleaved rendering: user messages, agent thinking,
+    and test commands in the exact order they occurred, so the judge can see
+    which thinking followed which message instead of two disconnected blocks."""
+    lines = []
+    for entry in case_file["timeline"]:
+        if entry["kind"] == "user_message":
+            tag = f"[{entry['intent']} | {'image attached' if entry['has_image'] else 'text only'}]"
+            lines.append(f"USER (turn {entry['turn']}) {tag}: {entry['text']}")
+        elif entry["kind"] == "thinking":
+            lines.append(f"AGENT THINKING (turn {entry['turn']}): {entry['text']}")
+        elif entry["kind"] == "test_command":
+            lines.append(f"AGENT RAN TEST/BUILD COMMAND (turn {entry['turn']}): `{entry['command']}`")
+        elif entry["kind"] == "spec_file_read":
+            lines.append(f"AGENT READ A SPEC-LIKE FILE (turn {entry['turn']}): `{entry['file_path']}`")
+    if case_file["thinking_truncated"]:
+        lines.append("(additional thinking beyond the size cap omitted)")
+    return "\n\n".join(lines) if lines else "(empty session)"
 
 
-def build_symptom_judge_prompt(case_file):
-    msgs = "\n".join(
-        f"{i+1}. [{intent} | {'image attached' if img else 'text only'}] {text}"
-        for i, (_, text, img, intent) in enumerate(case_file["user_messages"])
-    ) or "(no user messages)"
-
-    tests = "\n".join(
+def build_shared_context(case_file):
+    """The large part of the prompt that's IDENTICAL across all 5 per-symptom
+    calls for a given session. Sent as the system message so it's the shared
+    prefix a cache breakpoint can apply to (see ATTEMPT_PROMPT_CACHING)."""
+    tests_summary = "\n".join(
         f"- `{t['command']}` -> {t['result'] or 'unclear'}" for t in case_file["test_runs"]
     ) or "(none run)"
 
-    if case_file["thinking_blocks"]:
-        thinking = "\n\n".join(
-            f"[turn {tb['turn']}] {tb['text']}" for tb in case_file["thinking_blocks"]
-        )
-        if case_file["thinking_truncated"]:
-            thinking += "\n\n(additional thinking beyond the size cap omitted)"
-    else:
-        thinking = "(no thinking blocks captured)"
-
-    defs = "\n".join(f"- {name}: {desc}" for name, desc in SYMPTOM_DEFINITIONS.items())
-
     return (
         "You are reviewing one coding-agent session for signs of 'vibe-fixing' "
-        "(accepting fixes without proper spec or verification). Here is the "
-        "session, condensed:\n\n"
-        f"USER MESSAGES (in order, each tagged with a heuristic intent label "
-        f"'question' / 'change_request' / 'ambiguous' — treat this label as a "
-        f"hint, not ground truth, and re-read the message yourself):\n{msgs}\n\n"
+        "(accepting fixes without proper spec or verification).\n\n"
+        f"CHRONOLOGICAL SESSION TIMELINE (user messages, agent thinking, and test "
+        f"commands in the exact order they occurred — each user message is tagged "
+        f"with a heuristic intent label 'question' / 'change_request' / 'ambiguous'; "
+        f"treat that label as a hint, not ground truth):\n\n{render_timeline(case_file)}\n\n"
         f"FILES TOUCHED: {len(case_file['files_touched'])} files\n\n"
-        f"TEST/BUILD COMMANDS RUN:\n{tests}\n\n"
-        f"FULL ASSISTANT THINKING (every thinking block in this session, in "
-        f"order, not just ones that look hedgy — read all of it and decide "
-        f"for yourself whether it shows doubt, confusion, or a hedge-then-"
-        f"submit pattern):\n{thinking}\n\n"
-        f"SYMPTOM DEFINITIONS:\n{defs}\n"
-        f"{FEW_SHOT_EXAMPLES}\n"
-        "For each symptom, decide if it is present in THIS session. Answer with "
-        "ONLY a JSON object, no other text, in exactly this shape:\n"
-        "{\n"
-        '  "session_is_pure_qa": true or false,  // true only if EVERY user message in this session is a question/explanation request with no code change ever requested\n'
-        '  "no_spec": {"present": true or false, "evidence": "<one short sentence>"},\n'
-        '  "no_closed_loop": {"present": true or false, "evidence": "..."},\n'
-        '  "no_acceptance_criteria": {"present": true or false, "evidence": "..."},\n'
-        '  "no_visual_reference": {"present": true or false, "evidence": "..."},\n'
-        '  "repetitive_fix_attempts": {"present": true or false, "evidence": "..."},\n'
-        '  "no_verification_by_user": {"present": true or false, "evidence": "..."}\n'
-        "}"
+        f"SPEC-LIKE FILES THE AGENT READ (e.g. AGENTS.md, CLAUDE.md, SPEC.md, "
+        f"README.md, design docs — these may already explain what a vague-"
+        f"looking user request means in this repo): "
+        f"{', '.join(case_file['spec_files_read']) if case_file['spec_files_read'] else '(none read)'}\n\n"
+        f"TEST/BUILD COMMAND RESULTS SUMMARY:\n{tests_summary}\n"
     )
 
 
-def judge_symptoms(client, case_file, model=JUDGE_MODEL):
+def build_symptom_prompt(symptom_name):
+    """The small part that varies per call: this one symptom's definition and
+    examples, at the top, followed by the instruction referencing the trace
+    already given in the system message."""
+    definition = SYMPTOM_DEFINITIONS[symptom_name]
+    examples = FEW_SHOT_EXAMPLES_BY_SYMPTOM[symptom_name]
+    return (
+        f"SYMPTOM TO EVALUATE: {symptom_name}\n\n"
+        f"DEFINITION: {definition}\n\n"
+        f"CALIBRATION EXAMPLES (generic, not from this session):\n{examples}\n\n"
+        "Using the session timeline given above, decide whether this specific "
+        "symptom is present in THIS session. Think through the evidence in your "
+        "reasoning field first, then give your final applicable/present/evidence answer."
+    )
+
+
+def _messages_for_call(case_file, symptom_name):
+    system_content = build_shared_context(case_file)
+    if ATTEMPT_PROMPT_CACHING:
+        # Best-effort Anthropic-style cache breakpoint. If the proxy doesn't
+        # honor cache_control, this is simply ignored — no error, no cache
+        # savings. If your OpenAI-SDK version validates content blocks
+        # strictly and rejects the extra key, set ATTEMPT_PROMPT_CACHING=False.
+        system_message = {
+            "role": "system",
+            "content": [{"type": "text", "text": system_content, "cache_control": {"type": "ephemeral"}}],
+        }
+    else:
+        system_message = {"role": "system", "content": system_content}
+    user_message = {"role": "user", "content": build_symptom_prompt(symptom_name)}
+    return [system_message, user_message]
+
+
+def _parse_structured_response(response):
+    text = response.choices[0].message.content
+    if text is None:
+        raise ValueError("empty response content")
+    text = text.strip().replace("```json", "").replace("```", "").strip()
+    return json.loads(text)
+
+
+def judge_one_symptom(client, case_file, symptom_name, model=JUDGE_MODEL):
+    """One isolated call for one symptom. Tries structured output first;
+    falls back to plain-JSON prompting if the proxy/model rejects
+    response_format (e.g. unsupported on this model via this proxy)."""
+    messages = _messages_for_call(case_file, symptom_name)
+
+    if USE_STRUCTURED_OUTPUT:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=800,
+                temperature=0,
+                timeout=45.0,
+                messages=messages,
+                response_format=SYMPTOM_JUDGMENT_SCHEMA,
+            )
+            return _parse_structured_response(response)
+        except Exception:
+            pass  # fall through to plain-JSON prompting below
+
+    # Fallback: no response_format support. Ask for the same shape in plain
+    # text and parse manually, same as the pre-structured-output version.
+    fallback_messages = list(messages)
+    fallback_messages[-1] = {
+        "role": "user",
+        "content": (
+            fallback_messages[-1]["content"]
+            + "\n\nRespond with ONLY a JSON object, no other text, in exactly this "
+              'shape: {"reasoning": "...", "applicable": true/false, "present": '
+              'true/false, "evidence": "..."}'
+        ),
+    }
     try:
         response = client.chat.completions.create(
             model=model,
-            max_tokens=1200,   # bumped: prompt now includes full thinking + few-shot, more room for evidence text
+            max_tokens=800,
             temperature=0,
-            timeout=45.0,      # bumped alongside larger prompt so we don't time out mid-response
-            messages=[{"role": "user", "content": build_symptom_judge_prompt(case_file)}],
+            timeout=45.0,
+            messages=fallback_messages,
         )
-        text = response.choices[0].message.content.strip()
-        text = text.replace("```json", "").replace("```", "").strip()
-        return json.loads(text)
+        return _parse_structured_response(response)
     except Exception as e:
         return {"error": str(e)}
 
 
-def apply_post_filters(result, case_file):
-    """Deterministic safety net on top of the judge's own answer: if the
-    session has no actual change-request turn (or the judge itself says the
-    whole session is pure Q&A), force the four request-quality symptoms to
-    False regardless of what the judge returned. This directly targets the
-    'explain me' false-positive complaint — belt and suspenders alongside the
-    prompt-level exclusion, since judges do occasionally ignore instructions."""
+def apply_post_filter(symptom_name, result, case_file):
+    """Deterministic safety net on top of the judge's own 'applicable' field:
+    if the session has no actual change-request turn, force the four
+    request-quality symptoms to not-present regardless of what the judge
+    returned. Belt and suspenders alongside the prompt-level exclusion, since
+    judges do occasionally ignore instructions."""
     if not isinstance(result, dict) or "error" in result:
         return result
-    pure_qa = bool(result.get("session_is_pure_qa")) or not session_has_change_request(case_file)
-    if pure_qa:
-        for name in REQUEST_QUALITY_SYMPTOMS:
-            entry = result.get(name)
-            if isinstance(entry, dict) and entry.get("present"):
-                result[name] = {
-                    "present": False,
-                    "evidence": "overridden: session has no actual change-request turn (pure Q&A)",
-                }
+    if symptom_name in REQUEST_QUALITY_SYMPTOMS and not session_has_change_request(case_file):
+        if result.get("present"):
+            result = dict(result)
+            result["present"] = False
+            result["applicable"] = False
+            result["evidence"] = "overridden: session has no actual change-request turn (pure Q&A)"
     return result
 
 
@@ -502,15 +654,16 @@ def run(session_ids, paths, sample=SAMPLE, verbose=True):
     print(f"total sessions to process: {total:,}\n")
 
     counts = Counter()
-    n_ok = n_skipped = n_judged = 0
-    evidence_samples = {name: [] for name in SYMPTOM_DEFINITIONS}
+    call_successes = Counter()   # per-symptom denominator: sessions where that symptom's call succeeded
+    n_ok = n_skipped = 0
+    evidence_samples = {name: [] for name in SYMPTOM_ORDER}
     debug_steps = 3
 
     for i, session_id in enumerate(ids, 1):
         show_debug = i <= debug_steps
         if i == 1 or i % 25 == 0 or i == total:
             print(f"  [{i}/{total}] processing {session_id} "
-                  f"(ok={n_ok} judged={n_judged} skipped={n_skipped})", flush=True)
+                  f"(ok={n_ok} skipped={n_skipped})", flush=True)
         try:
             if show_debug:
                 print(f"    -> downloading transcript...", flush=True)
@@ -529,38 +682,35 @@ def run(session_ids, paths, sample=SAMPLE, verbose=True):
                 if is_flagged:
                     counts[scope_name] += 1
 
-            if show_debug:
-                print(f"    -> calling Haiku judge...", flush=True)
-            result = judge_symptoms(client, case_file)
-            if show_debug:
-                print(f"    -> judge call finished", flush=True)
-            if not result or "error" in result:
-                n_skipped += 1
-                if show_debug and result:
-                    print(f"    -> judge error: {result.get('error')}", flush=True)
-                continue
+            for symptom_name in SYMPTOM_ORDER:
+                if show_debug:
+                    print(f"    -> judging {symptom_name}...", flush=True)
+                result = judge_one_symptom(client, case_file, symptom_name)
+                if not result or "error" in result:
+                    if show_debug and result:
+                        print(f"       error: {result.get('error')}", flush=True)
+                    continue
 
-            result = apply_post_filters(result, case_file)
-            n_judged += 1
+                result = apply_post_filter(symptom_name, result, case_file)
+                call_successes[symptom_name] += 1
 
-            for name in SYMPTOM_DEFINITIONS:
-                entry = result.get(name, {})
-                if isinstance(entry, dict) and entry.get("present"):
-                    counts[name] += 1
-                    if len(evidence_samples[name]) < 5:
-                        evidence_samples[name].append((session_id, entry.get("evidence", "")))
+                if result.get("present"):
+                    counts[symptom_name] += 1
+                    if len(evidence_samples[symptom_name]) < 5:
+                        evidence_samples[symptom_name].append((session_id, result.get("evidence", "")))
 
         except Exception as e:
             n_skipped += 1
             if show_debug:
                 print(f"    -> exception: {e}", flush=True)
 
-    print(f"\nsessions with usable data: {n_ok} | skipped: {n_skipped} | judged: {n_judged}")
-    print(f"\n{'symptom':28s} {'count':>7s} {'% of relevant sessions':>24s}")
+    print(f"\nsessions with usable data: {n_ok} | skipped: {n_skipped}")
+    print(f"\n{'symptom':28s} {'count':>7s} {'% of judged sessions':>22s}")
     scope_names = ["scope_files_too_many", "scope_turns_too_long"]
-    for name in list(SYMPTOM_DEFINITIONS) + scope_names:
-        denom = (n_judged or 1) if name not in scope_names else (n_ok or 1)
-        print(f"{name:28s} {counts[name]:>7,} {100*counts[name]/denom:>23.0f}%")
+    for name in SYMPTOM_ORDER + scope_names:
+        denom = call_successes[name] if name not in scope_names else n_ok
+        denom = denom or 1
+        print(f"{name:28s} {counts[name]:>7,} {100*counts[name]/denom:>21.0f}%")
 
     if verbose:
         print("\nsample evidence (spot-check these against the real transcripts):")
@@ -570,7 +720,7 @@ def run(session_ids, paths, sample=SAMPLE, verbose=True):
                 for sid, ev in samples:
                     print(f"    [{sid}] {ev}")
 
-    return counts, n_judged, n_ok, evidence_samples
+    return counts, call_successes, n_ok, evidence_samples
 
 
 # ----------------------------------------------------------------------
@@ -585,12 +735,11 @@ SYMPTOM_DESCRIPTIONS_SHORT = {
     "repetitive_fix_attempts": "The agent fixes the same bug wrong more than once, and the user has to report it again",
     "scope_files_too_many": "Too many files were changed in one session",
     "scope_turns_too_long": "The session had an unusually high number of turns",
-    "no_verification_by_user": "There is a real sign the user did not check the fix (not just \"no proof shown\")",
 }
 
 
-def write_markdown_report(counts, n_judged, n_ok, evidence_samples, path=REPORT_OUTPUT_PATH):
-    ordered = ["no_closed_loop", "no_verification_by_user", "no_spec", "no_acceptance_criteria",
+def write_markdown_report(counts, call_successes, n_ok, evidence_samples, path=REPORT_OUTPUT_PATH):
+    ordered = ["no_closed_loop", "no_spec", "no_acceptance_criteria",
                "scope_turns_too_long", "scope_files_too_many", "repetitive_fix_attempts", "no_visual_reference"]
     scope_names = {"scope_files_too_many", "scope_turns_too_long"}
 
@@ -605,51 +754,46 @@ def write_markdown_report(counts, n_judged, n_ok, evidence_samples, path=REPORT_
     )
 
     lines.append("## What I Looked For\n")
-    lines.append("I checked each session for 7 symptoms:\n")
+    lines.append("I checked each session for 6 symptoms:\n")
     lines.append("| Symptom | What it means |")
     lines.append("|---|---|")
     for name in ["no_spec", "no_closed_loop", "no_acceptance_criteria", "no_visual_reference",
-                 "repetitive_fix_attempts", "scope_files_too_many", "scope_turns_too_long",
-                 "no_verification_by_user"]:
+                 "repetitive_fix_attempts", "scope_files_too_many", "scope_turns_too_long"]:
         lines.append(f"| `{name}` | {SYMPTOM_DESCRIPTIONS_SHORT[name]} |")
     lines.append("")
 
     lines.append("## How I Detected Them\n")
     lines.append(
         "I used two methods:\n\n"
-        "**1. LLM-as-judge (Claude Haiku 4.5).** For 6 of the symptoms, I cannot use simple rules "
-        "— I need to read the conversation. So each session was sent to Haiku, one API call per "
-        "session. Compared to the first version of this report, the case file now includes:\n"
-        "- all user messages, in order, each tagged with a heuristic intent label "
-        "(question / change request / ambiguous), so the judge can tell a request for a fix apart "
-        "from a plain question\n"
-        "- the number of files touched\n"
-        "- any test/build commands run, and whether they passed or failed, with a wider capture "
-        "window and correct parsing of structured tool results (an earlier version was "
-        "accidentally reading the Python object representation instead of the actual text in some "
-        "cases)\n"
-        "- **every thinking block from the agent, in full** — not just short excerpts that already "
-        "contained a hedge word. Pre-filtering by keyword before the judge ever saw the text meant "
-        "we were partly deciding the answer ourselves; the judge now reads all of the agent's "
-        "reasoning and decides for itself whether it shows doubt\n\n"
-        "Haiku received this case file plus a clear definition of each symptom, a short set of "
-        "calibration examples (flag / do-not-flag pairs) for each symptom, and returned a yes/no "
-        "answer with a short reason for each one. To directly address the \"explain me\" false-"
-        "positive problem: the four symptoms that describe the quality of a *request* "
-        "(`no_spec`, `no_closed_loop`, `no_acceptance_criteria`, `no_visual_reference`) are now "
-        "explicitly defined to not apply to sessions that are pure questions/explanations with no "
-        "code change requested, and this is enforced twice — once in the prompt itself, and again "
-        "as a deterministic override after the judge answers, in case the judge doesn't follow the "
-        "instruction.\n\n"
+        "**1. LLM-as-judge (Claude Haiku 4.5), one call per symptom.** Instead of asking one "
+        "call to judge every symptom at once, each session now gets one isolated call per "
+        "symptom. Each call gets that symptom's definition and calibration examples up front, "
+        "then the full session trace. The trace itself — a chronological, interleaved timeline "
+        "of user messages, agent thinking, and test commands in the order they actually happened "
+        "— is identical across a session's calls, so it's sent as a shared, cacheable prefix "
+        "rather than rebuilt from scratch each time.\n\n"
+        "Compared to the previous version:\n"
+        "- User messages and agent thinking are now interleaved in one chronological timeline, "
+        "instead of being shown as two separate, disconnected blocks — so the judge can tell "
+        "which thinking happened between which two messages.\n"
+        "- Every thinking block from the agent is included in full, not just short excerpts that "
+        "already contained a hedge word.\n"
+        "- Judge responses use structured output with a `reasoning` field that comes first, so the "
+        "model has room to think before it has to commit to a yes/no, instead of being squeezed "
+        "into a bare JSON object with no room to reason.\n"
+        "- The four symptoms about request quality (`no_spec`, `no_closed_loop`, "
+        "`no_acceptance_criteria`, `no_visual_reference`) are explicitly defined to not apply to "
+        "sessions that are pure questions/explanations with no code change requested, enforced "
+        "both in the prompt and as a deterministic override after the judge answers.\n\n"
         "**2. Metadata-only rules.** The two `scope_*` symptoms don't need an LLM. I just count "
         "files touched and turns per session, and flag sessions above a threshold.\n"
     )
 
-    lines.append(f"## Results ({n_judged:,} Sessions Judged)\n")
-    lines.append("| Symptom | Count | % of sessions |")
+    lines.append("## Results\n")
+    lines.append("| Symptom | Count | % of judged sessions |")
     lines.append("|---|---|---|")
     for name in ordered:
-        denom = n_ok if name in scope_names else n_judged
+        denom = n_ok if name in scope_names else call_successes.get(name, 0)
         pct = round(100 * counts[name] / denom) if denom else 0
         lines.append(f"| `{name}` | {counts[name]:,} | {pct}% |")
     lines.append("")
@@ -661,7 +805,7 @@ def write_markdown_report(counts, n_judged, n_ok, evidence_samples, path=REPORT_
         "always worth reading the underlying transcript before trusting an aggregate number.\n"
     )
     for name in ["no_spec", "no_closed_loop", "no_acceptance_criteria", "no_visual_reference",
-                 "repetitive_fix_attempts", "no_verification_by_user"]:
+                 "repetitive_fix_attempts"]:
         lines.append(f"**`{name}`**\n")
         samples = evidence_samples.get(name) or []
         if samples:
@@ -674,15 +818,13 @@ def write_markdown_report(counts, n_judged, n_ok, evidence_samples, path=REPORT_
 
     lines.append("## A Note of Caution\n")
     lines.append(
-        "`no_verification_by_user` should still be treated carefully even after tightening its "
-        "prompt and adding calibration examples. A person could always test something outside the "
-        "chat window, so this number likely remains an upper bound on true skipped-verification "
-        "rather than an exact count. The other symptoms rely on clearer, easier-to-check evidence "
-        "(a request's wording plus its intent tag, whether a test command was run and what it "
-        "returned, file counts) and the pure-Q&A override directly removes a known false-positive "
-        "source, so they should be more trustworthy as reported — but spot-checking the Examples "
-        "section above against real transcripts is still recommended before citing these numbers "
-        "externally.\n"
+        "`no_verification_by_user` has been removed from this report entirely — it was mostly "
+        "detecting \"no proof shown in the transcript\" rather than \"the user actually skipped "
+        "verifying,\" and a person could always test something outside the chat window, so it "
+        "wasn't trustworthy as reported. The remaining symptoms rely on clearer, easier-to-check "
+        "evidence (a request's wording plus its intent tag, whether a test command was run and "
+        "what it returned, file counts), but spot-checking the Examples section above against "
+        "real transcripts is still recommended before citing these numbers externally.\n"
     )
 
     with open(path, "w", encoding="utf-8") as f:
@@ -699,5 +841,5 @@ if __name__ == "__main__":
     paths = path_map(logs)
     print(f"Filtered to {len(all_ids):,} Claude Code sessions.\n")
 
-    counts, n_judged, n_ok, evidence_samples = run(all_ids, paths)
-    write_markdown_report(counts, n_judged, n_ok, evidence_samples)
+    counts, call_successes, n_ok, evidence_samples = run(all_ids, paths)
+    write_markdown_report(counts, call_successes, n_ok, evidence_samples)

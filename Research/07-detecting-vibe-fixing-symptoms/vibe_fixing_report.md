@@ -1,10 +1,10 @@
 # Vibe-Fixing Symptoms in the SWE-Chat Dataset
 
-This report shows how often "vibe-fixing" happens in coding-agent sessions. Vibe-fixing means a user accepts a fix from the agent without a clear task, without checking it, or without proof that it works. I checked **4,794 real coding sessions** from the SWE-Chat dataset (agent: Claude Code). All sessions were included, not only long ones.
+This report shows how often "vibe-fixing" happens in coding-agent sessions. Vibe-fixing means a user accepts a fix from the agent without a clear task, without checking it, or without proof that it works. I checked **20 real coding sessions** from the SWE-Chat dataset (agent: Claude Code). All sessions were included, not only long ones.
 
 ## What I Looked For
 
-I checked each session for 7 symptoms:
+I checked each session for 6 symptoms:
 
 | Symptom | What it means |
 |---|---|
@@ -15,41 +15,61 @@ I checked each session for 7 symptoms:
 | `repetitive_fix_attempts` | The agent fixes the same bug wrong more than once, and the user has to report it again |
 | `scope_files_too_many` | Too many files were changed in one session |
 | `scope_turns_too_long` | The session had an unusually high number of turns |
-| `no_verification_by_user` | There is a real sign the user did not check the fix (not just "no proof shown") |
 
 ## How I Detected Them
 
 I used two methods:
 
-**1. LLM-as-judge (Claude Haiku 4.5).** For 6 of the symptoms, I cannot use simple rules — I need to read the conversation. So each session was sent to Haiku, one API call per session. To keep this cheap, I did not send the full raw transcript. Instead, I built a short "case file" per session with:
-- all user messages, in order
-- the number of files touched
-- any test/build commands run, and whether they passed or failed
-- short pieces of agent "thinking" where it showed doubt but still acted
+**1. LLM-as-judge (Claude Haiku 4.5), one call per symptom.** Instead of asking one call to judge every symptom at once, each session now gets one isolated call per symptom. Each call gets that symptom's definition and calibration examples up front, then the full session trace. The trace itself — a chronological, interleaved timeline of user messages, agent thinking, and test commands in the order they actually happened — is identical across a session's calls, so it's sent as a shared, cacheable prefix rather than rebuilt from scratch each time.
 
-Haiku received this case file plus a clear definition of each symptom, and returned a yes/no answer with a short reason for each one.
+Compared to the previous version:
+- User messages and agent thinking are now interleaved in one chronological timeline, instead of being shown as two separate, disconnected blocks — so the judge can tell which thinking happened between which two messages.
+- Every thinking block from the agent is included in full, not just short excerpts that already contained a hedge word.
+- Judge responses use structured output with a `reasoning` field that comes first, so the model has room to think before it has to commit to a yes/no, instead of being squeezed into a bare JSON object with no room to reason.
+- The four symptoms about request quality (`no_spec`, `no_closed_loop`, `no_acceptance_criteria`, `no_visual_reference`) are explicitly defined to not apply to sessions that are pure questions/explanations with no code change requested, enforced both in the prompt and as a deterministic override after the judge answers.
 
 **2. Metadata-only rules.** The two `scope_*` symptoms don't need an LLM. I just count files touched and turns per session, and flag sessions above a threshold.
 
-## Results (4,794 Sessions Judged)
+## Results
 
-| Symptom | Count | % of sessions |
+| Symptom | Count | % of judged sessions |
 |---|---|---|
-| `no_closed_loop` | 3,910 | 82% |
-| `no_verification_by_user` | 3,778 | 79% |
-| `no_spec` | 2,426 | 51% |
-| `no_acceptance_criteria` | 2,370 | 49% |
-| `scope_turns_too_long` | 1,282 | 26% |
-| `scope_files_too_many` | 1,154 | 24% |
-| `repetitive_fix_attempts` | 896 | 19% |
-| `no_visual_reference` | 275 | 6% |
+| `no_closed_loop` | 4 | 27% |
+| `no_spec` | 0 | 0% |
+| `no_acceptance_criteria` | 2 | 17% |
+| `scope_turns_too_long` | 7 | 35% |
+| `scope_files_too_many` | 2 | 10% |
+| `repetitive_fix_attempts` | 0 | 0% |
+| `no_visual_reference` | 0 | 0% |
 
-## A Note of Caution: One Number Is Not Reliable Yet
+## Examples
 
-`no_verification_by_user` (79%) should be treated carefully. I tried to fix its prompt so it only flags sessions with a **real sign** the user skipped verification — not just "the transcript doesn't show proof." But when I checked the evidence text Haiku gave us, most reasons still said things like *"never explicitly confirms the fix worked"* — which is exactly the old, weaker pattern. This means the judge is likely still measuring "no proof visible in the chat" instead of "the user actually skipped checking." Since a person could easily test something outside the chat window, this number is probably too high, and should not be reported as-is without further review.
+For each symptom flagged by the LLM judge, here are real examples pulled from this run (session id + the judge's one-line evidence). These are spot-check material, not proof — always worth reading the underlying transcript before trusting an aggregate number.
 
-All other symptoms use clearer, easier-to-check evidence (a request's wording, whether a test command was run, file counts), so they are more trustworthy as reported.
+**`no_spec`**
 
-## Why This Matters
+- (no examples captured in this run)
 
-`no_closed_loop` and `no_spec` are the most common patterns: most sessions start with a vague request and end with no test to confirm the fix worked. This matches the idea of "vibe-fixing" — moving fast without a clear spec or a way to prove success. `no_visual_reference` is rare (6%), which makes sense since most sessions in this dataset are backend/CLI work, not UI work.
+**`no_closed_loop`**
+
+- [`2026-01-19-1b3e6441-62e3-4b41-8a0c-9d252f531f7a`] The agent created a CODEOWNERS file as requested but ran no tests, verification steps, or reproduction checks to confirm the file was created correctly or that the GitHub CODEOWNERS functionality would work as intended.
+- [`2026-01-19-38917d7d-9f69-4210-a3b0-eed0a9e97575`] The agent added timing instrumentation to the telemetry code (turns 50-64) but only ran linting afterward, never running the full test suite (`mise run test`) to verify the changes work correctly and don't break existing functionality.
+- [`2026-01-21-130d7b7e-5801-4345-9bd6-f32fd9b8429b`] User requested "Implement 1,2 and 3" at turn 94 (adding WithAgent to three files), but the session shows no test runs or verification that these implementations were completed or working correctly after the request.
+- [`2026-01-22-48f428f9-72d8-40b2-9594-953019809473`] The agent implemented configuration changes to `.goreleaser.yaml` and `.github/workflows/release.yml` (turn 66-84) but never ran GoReleaser, tested the workflow, or verified the Homebrew tap would actually be updated—only checking for schema diagnostics in the editor.
+
+**`no_acceptance_criteria`**
+
+- [`2026-01-19-38917d7d-9f69-4210-a3b0-eed0a9e97575`] (no evidence text returned)
+- [`2026-01-21-130d7b7e-5801-4345-9bd6-f32fd9b8429b`] Turn 0's request "We should add the agent name to any logging" lacks concrete acceptance criteria: it doesn't specify which logging calls should include the agent name, how to verify the change works, or what the expected output format should be.
+
+**`no_visual_reference`**
+
+- (no examples captured in this run)
+
+**`repetitive_fix_attempts`**
+
+- (no examples captured in this run)
+
+## A Note of Caution
+
+`no_verification_by_user` has been removed from this report entirely — it was mostly detecting "no proof shown in the transcript" rather than "the user actually skipped verifying," and a person could always test something outside the chat window, so it wasn't trustworthy as reported. The remaining symptoms rely on clearer, easier-to-check evidence (a request's wording plus its intent tag, whether a test command was run and what it returned, file counts), but spot-checking the Examples section above against real transcripts is still recommended before citing these numbers externally.
