@@ -22,7 +22,29 @@ Symptoms detected:
 
     (no_verification_by_user was removed — see CHANGELOG)
 
-CHANGELOG (this revision):
+CHANGELOG (latest revision):
+    - REMOVED all regex/heuristic intent classification. classify_intent(),
+      QUESTION_PATTERNS, CHANGE_REQUEST_PATTERNS, and the "intent" field are
+      gone entirely. The judge now decides "is this a real change request or
+      just a question" purely by reading the actual message text itself, via
+      its own applicable/present fields in the schema — no pre-computed hint
+      shown in the prompt, and nothing biasing it either way.
+    - The deterministic post-filter (apply_post_filter) is simplified to a
+      minimal STRUCTURAL check with no text matching at all: it only
+      overrides the four request-quality symptoms when a session has exactly
+      one user message (is_single_message_session). Any session with more
+      than one message is left entirely to the judge.
+    - build_case_file now preserves EVERY tool_use call as exactly one
+      timeline entry, not just the 3 previously-hardcoded categories
+      (edit/write, read/grep/glob, bash-test-commands). Tool calls we don't
+      have special handling for (WebFetch, Task/subagent spawns,
+      NotebookEdit, MCP tools, etc.) now show up in the timeline with a
+      generic label + short input summary instead of being silently dropped.
+      Recognized categories (edits, reads, spec-file reads, test commands)
+      still get more specific labels in the same single entry — no
+      duplicate entries per tool call.
+
+CHANGELOG (previous revision):
     - REMOVED no_verification_by_user entirely. It was flagged as unreliable
       (mostly detecting "no proof shown in chat" rather than "user actually
       skipped verifying") and we're not attempting to fix it right now — it's
@@ -73,7 +95,6 @@ Calls Claude through JetBrains' internal LiteLLM proxy (OpenAI-compatible
 API). Set your LiteLLM key as OPENAI_API_KEY before running.
 """
 
-import re
 import json
 from collections import Counter
 
@@ -86,7 +107,7 @@ JUDGE_MODEL = "anthropic/claude-haiku-4-5"
 LITELLM_BASE_URL = "https://litellm.labs.jb.gg"
 REPORT_OUTPUT_PATH = "vibe_fixing_report.md"
 
-SAMPLE = 20   # None = run on every parseable session
+SAMPLE = 15   # None = run on every parseable session
 
 SCOPE_FILES_TOO_MANY_THRESHOLD = 8
 SCOPE_TURNS_TOO_LONG_THRESHOLD = 150
@@ -128,36 +149,6 @@ USE_STRUCTURED_OUTPUT = True
 # cache savings. Set to False if you'd rather not send the extra field at all.
 ATTEMPT_PROMPT_CACHING = True
 
-# Heuristic-only, used for the intent tag shown to the judge + the
-# deterministic post-filter. Not used to silently drop data — only to label it.
-QUESTION_PATTERNS = (
-    r"^\s*(what|why|how|when|where|which|who)\b",
-    r"^\s*(explain|describe|walk me through|can you explain|could you explain)\b",
-    r"^\s*(is there|are there|does|do|did|is it|can it)\b",
-    r"\bwhat does\b", r"\bwhy does\b", r"\bhow does\b",
-    r"^\s*(review|summarize|summarise)\b.*\?$",
-)
-CHANGE_REQUEST_PATTERNS = (
-    r"\b(fix|add|remove|delete|change|update|refactor|implement|create|build|"
-    r"replace|rewrite|optimi[sz]e|clean\s?up|make it|improve|migrate|upgrade|"
-    r"convert|rename|move|split|merge|revert)\b",
-)
-
-
-def classify_intent(text):
-    """Cheap heuristic tag: 'question', 'change_request', or 'ambiguous'.
-    Deliberately conservative — only tags 'question' when the message reads
-    as pure Q&A with no request-a-change language at all."""
-    t = text.strip().lower()
-    is_question = any(re.search(p, t) for p in QUESTION_PATTERNS) or t.endswith("?")
-    is_change = any(re.search(p, t) for p in CHANGE_REQUEST_PATTERNS)
-    if is_question and not is_change:
-        return "question"
-    if is_change:
-        return "change_request"
-    return "ambiguous"
-
-
 # Each symptom now carries its own definition + its own short calibration
 # examples, since each is judged in its own isolated call.
 SYMPTOM_DEFINITIONS = {
@@ -170,8 +161,9 @@ SYMPTOM_DEFINITIONS = {
         "REQUEST FOR A CHANGE. If the user is only asking a question, asking "
         "for an explanation, a code review, or a walkthrough — with no code "
         "change requested at all — there is no 'spec' to be vague, so mark "
-        "applicable=false. A precise question ('what does this regex do?') is "
-        "not vague just because it's short. IMPORTANT EXCLUSION #2: if the "
+        "applicable=false. Judge this yourself from the actual message text — "
+        "a precise question ('what does this regex do?') is not vague just "
+        "because it's short. IMPORTANT EXCLUSION #2: if the "
         "user's request is vague on its own BUT the agent read a spec-like "
         "file in this session (see the 'SPEC-LIKE FILES THE AGENT READ' line) "
         "that plausibly explains what the vague request means in this repo — "
@@ -375,8 +367,8 @@ def build_case_file(events):
     messages, rather than seeing "all messages" then "all thinking" as two
     disconnected blocks.
     """
-    timeline = []              # [{"kind": "user_message"/"thinking"/"test_command"/"spec_file_read", ...}] in strict order
-    user_messages = []         # [(text, has_image, intent)] — kept for post-filter convenience
+    timeline = []              # [{"kind": "user_message"/"thinking"/"test_command"/"spec_file_read"/"tool_call", ...}] in strict order
+    user_messages = []         # [(text, has_image)]
     files_touched = set()
     files_read = set()
     spec_files_read = set()     # subset of files_read matching SPEC_FILE_PATTERNS
@@ -407,27 +399,50 @@ def build_case_file(events):
                             thinking_truncated = True
 
                     if b.get("type") == "tool_use":
-                        name = b.get("name", "")
+                        name = b.get("name", "") or "(unnamed tool)"
                         tool_input = b.get("input", {}) or {}
                         name_lower = name.lower()
+
+                        # Every tool_use produces exactly ONE timeline entry —
+                        # nothing is silently dropped. Recognized categories
+                        # (edit/write, read/grep/glob, bash test commands) get
+                        # a more specific label/detail; anything else
+                        # (WebFetch, Task/subagent, NotebookEdit, MCP tools,
+                        # etc.) still gets a generic entry so the judge sees
+                        # the full session, not a pre-filtered slice of it.
+                        label = name
+                        detail = ""
+                        is_spec_file = False
+
                         if any(k in name_lower for k in ("edit", "write")) and "todowrite" not in name_lower:
                             fp = tool_input.get("file_path")
                             if fp:
                                 files_touched.add(fp)
-                        if any(k in name_lower for k in ("read", "grep", "glob")) and "todo" not in name_lower:
+                            detail = fp or ""
+                        elif any(k in name_lower for k in ("read", "grep", "glob")) and "todo" not in name_lower:
                             fp = tool_input.get("file_path") or tool_input.get("path") or tool_input.get("pattern")
                             if fp:
                                 files_read.add(fp)
                                 if any(pat in fp.lower() for pat in SPEC_FILE_PATTERNS):
-                                    if fp not in spec_files_read:
-                                        spec_files_read.add(fp)
-                                        timeline.append({"kind": "spec_file_read", "turn": turn_no, "file_path": fp})
-                        if "bash" in name_lower:
-                            command = tool_input.get("command", "") or ""
+                                    is_spec_file = True
+                                    spec_files_read.add(fp)
+                            detail = fp or ""
+                        elif "bash" in name_lower:
+                            command = (tool_input.get("command", "") or "")[:MAX_TEST_COMMAND_CHARS]
+                            detail = command
                             if any(k in command.lower() for k in TEST_KEYWORDS):
-                                trimmed = command[:MAX_TEST_COMMAND_CHARS]
-                                test_runs.append({"command": trimmed, "result": None, "id": b.get("id")})
-                                timeline.append({"kind": "test_command", "turn": turn_no, "command": trimmed})
+                                test_runs.append({"command": command, "result": None, "id": b.get("id")})
+                                label = "Bash (test/build command)"
+                        else:
+                            # Generic fallback: short repr of whatever inputs
+                            # this tool call had, so it's still visible even
+                            # if we don't have special-case handling for it.
+                            detail = ", ".join(f"{k}={str(v)[:120]}" for k, v in tool_input.items())[:300]
+
+                        timeline.append({
+                            "kind": "tool_call", "turn": turn_no, "name": name,
+                            "label": label, "detail": detail, "is_spec_file": is_spec_file,
+                        })
 
         if etype == "user":
             has_image = False
@@ -440,12 +455,11 @@ def build_case_file(events):
             else:
                 text = ""
             if text:
-                intent = classify_intent(text)
                 trimmed_text = text[:MAX_USER_MESSAGE_CHARS]
-                user_messages.append((trimmed_text, has_image, intent))
+                user_messages.append((trimmed_text, has_image))
                 timeline.append({
                     "kind": "user_message", "turn": turn_no, "text": trimmed_text,
-                    "has_image": has_image, "intent": intent,
+                    "has_image": has_image,
                 })
 
             if isinstance(content, list):
@@ -482,12 +496,14 @@ def compute_scope_flags(case_file):
     }
 
 
-def session_has_change_request(case_file):
-    """True if at least one user message reads as an actual request for a
-    code change (not pure Q&A). Used as a deterministic post-filter safety
-    net for the four 'request quality' symptoms, on top of the judge's own
-    'applicable' field."""
-    return any(intent == "change_request" for _, _, intent in case_file["user_messages"])
+def is_single_message_session(case_file):
+    """True if the session has exactly one user message (no back-and-forth
+    at all). Used as a minimal, non-heuristic structural backstop: a session
+    with only one message almost certainly isn't a real vibe-fixing case for
+    the four 'request quality' symptoms, regardless of what it says. Sessions
+    with more than one message are left entirely to the judge's own
+    'applicable'/'present' answer — no text-pattern matching involved."""
+    return len(case_file["user_messages"]) == 1
 
 
 # ----------------------------------------------------------------------
@@ -501,14 +517,14 @@ def render_timeline(case_file):
     lines = []
     for entry in case_file["timeline"]:
         if entry["kind"] == "user_message":
-            tag = f"[{entry['intent']} | {'image attached' if entry['has_image'] else 'text only'}]"
+            tag = "[image attached]" if entry["has_image"] else "[text only]"
             lines.append(f"USER (turn {entry['turn']}) {tag}: {entry['text']}")
         elif entry["kind"] == "thinking":
             lines.append(f"AGENT THINKING (turn {entry['turn']}): {entry['text']}")
-        elif entry["kind"] == "test_command":
-            lines.append(f"AGENT RAN TEST/BUILD COMMAND (turn {entry['turn']}): `{entry['command']}`")
-        elif entry["kind"] == "spec_file_read":
-            lines.append(f"AGENT READ A SPEC-LIKE FILE (turn {entry['turn']}): `{entry['file_path']}`")
+        elif entry["kind"] == "tool_call":
+            spec_note = " [spec-like file]" if entry["is_spec_file"] else ""
+            detail = f": {entry['detail']}" if entry["detail"] else ""
+            lines.append(f"AGENT TOOL CALL (turn {entry['turn']}) {entry['label']}{spec_note}{detail}")
     if case_file["thinking_truncated"]:
         lines.append("(additional thinking beyond the size cap omitted)")
     return "\n\n".join(lines) if lines else "(empty session)"
@@ -525,10 +541,9 @@ def build_shared_context(case_file):
     return (
         "You are reviewing one coding-agent session for signs of 'vibe-fixing' "
         "(accepting fixes without proper spec or verification).\n\n"
-        f"CHRONOLOGICAL SESSION TIMELINE (user messages, agent thinking, and test "
-        f"commands in the exact order they occurred — each user message is tagged "
-        f"with a heuristic intent label 'question' / 'change_request' / 'ambiguous'; "
-        f"treat that label as a hint, not ground truth):\n\n{render_timeline(case_file)}\n\n"
+        f"CHRONOLOGICAL SESSION TIMELINE (every user message, every piece of "
+        f"agent thinking, and every tool call the agent made, in the exact "
+        f"order they occurred):\n\n{render_timeline(case_file)}\n\n"
         f"FILES TOUCHED: {len(case_file['files_touched'])} files\n\n"
         f"SPEC-LIKE FILES THE AGENT READ (e.g. AGENTS.md, CLAUDE.md, SPEC.md, "
         f"README.md, design docs — these may already explain what a vague-"
@@ -625,19 +640,20 @@ def judge_one_symptom(client, case_file, symptom_name, model=JUDGE_MODEL):
 
 
 def apply_post_filter(symptom_name, result, case_file):
-    """Deterministic safety net on top of the judge's own 'applicable' field:
-    if the session has no actual change-request turn, force the four
-    request-quality symptoms to not-present regardless of what the judge
-    returned. Belt and suspenders alongside the prompt-level exclusion, since
-    judges do occasionally ignore instructions."""
+    """Minimal structural safety net — no text/regex heuristics involved.
+    If the session has exactly one user message (no back-and-forth at all),
+    force the four request-quality symptoms to not-present regardless of
+    what the judge returned, since a single-message session almost certainly
+    isn't a real vibe-fixing case. Any session with more than one message is
+    left entirely to the judge's own applicable/present judgment."""
     if not isinstance(result, dict) or "error" in result:
         return result
-    if symptom_name in REQUEST_QUALITY_SYMPTOMS and not session_has_change_request(case_file):
+    if symptom_name in REQUEST_QUALITY_SYMPTOMS and is_single_message_session(case_file):
         if result.get("present"):
             result = dict(result)
             result["present"] = False
             result["applicable"] = False
-            result["evidence"] = "overridden: session has no actual change-request turn (pure Q&A)"
+            result["evidence"] = "overridden: session has only a single user message"
     return result
 
 
@@ -822,7 +838,7 @@ def write_markdown_report(counts, call_successes, n_ok, evidence_samples, path=R
         "detecting \"no proof shown in the transcript\" rather than \"the user actually skipped "
         "verifying,\" and a person could always test something outside the chat window, so it "
         "wasn't trustworthy as reported. The remaining symptoms rely on clearer, easier-to-check "
-        "evidence (a request's wording plus its intent tag, whether a test command was run and "
+        "evidence (the actual request text, whether a test command was run and "
         "what it returned, file counts), but spot-checking the Examples section above against "
         "real transcripts is still recommended before citing these numbers externally.\n"
     )
