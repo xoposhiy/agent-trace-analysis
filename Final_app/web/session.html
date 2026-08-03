@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Session · TraceLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" href="/">← all sessions</a>
+
+    <div class="detail-head">
+      <h2 id="title">Loading…</h2>
+      <div class="summary" id="summary"></div>
+      <div class="row-meta" id="meta"></div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="filters">
+      <div class="field">
+        <label for="f-metric">Y axis</label>
+        <select id="f-metric">
+          <option value="tokens">tokens</option>
+          <option value="time">time</option>
+          <option value="messages">messages</option>
+          <option value="money" disabled>money (needs a price table)</option>
+        </select>
+      </div>
+      <span class="spacer"></span>
+      <span class="soon" id="block-count"></span>
+    </div>
+
+    <div class="stage">
+      <div class="bar-col">
+        <div id="bar"></div>
+      </div>
+      <div>
+        <div id="tip" class="tip tip-empty">Hover a block</div>
+        <div id="pane" class="placeholder">Problem-specific visualization — later step.</div>
+      </div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/bar.js"></script>
+  <script src="/static/session.js"></script>
+</body>
+</html>

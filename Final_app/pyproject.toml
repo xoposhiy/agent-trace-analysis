@@ -1,0 +1,25 @@
+[project]
+name = "tracelens"
+version = "0.1.0"
+description = "Local dashboard for Claude Code session traces"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+llm = ["openai>=1.30"]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The import package is ``Final_app`` (the directory name); the distribution is
+# still called ``tracelens``. ``where = [".."]`` because the package directory
+# *is* the project root, so setuptools has to look one level up to see it.
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["Final_app*"]

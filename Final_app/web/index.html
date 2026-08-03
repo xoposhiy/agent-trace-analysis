@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TraceLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <h1>TraceLens</h1>
+      <span class="sub" id="root-hint"></span>
+    </header>
+
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" id="tab-sessions"
+              aria-selected="true" aria-controls="panel-sessions">Last sessions</button>
+      <button class="tab" role="tab" id="tab-problems"
+              aria-selected="false" aria-controls="panel-problems">Problems</button>
+    </div>
+
+    <section class="panel" id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions">
+      <div class="filters">
+        <div class="field">
+          <label for="f-project">Project</label>
+          <select id="f-project"><option value="">All projects</option></select>
+        </div>
+
+        <div class="field">
+          <label for="f-severity">Problem severity</label>
+          <select id="f-severity" disabled title="Problem detection is not implemented yet">
+            <option value="any">Any</option>
+          </select>
+        </div>
+        <span class="soon">severity filter arrives with problem detection</span>
+
+        <span class="spacer"></span>
+
+        <span class="soon" id="pending"></span>
+      </div>
+
+      <div id="llm-note"></div>
+      <div id="sessions"></div>
+    </section>
+
+    <section class="panel" id="panel-problems" role="tabpanel"
+             aria-labelledby="tab-problems" hidden>
+      <div class="empty-state">
+        <strong>Problems</strong><br>
+        Not implemented yet — detectors and the severity filter land in a later step.
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
