@@ -23,7 +23,7 @@ from openai import OpenAI
 import case_file as cf
 import classify as cl
 
-SAMPLE = 2   # None = run on every parseable session
+SAMPLE = 25   # None = run on every parseable session
 RESULTS_PATH = "results.json"
 
 

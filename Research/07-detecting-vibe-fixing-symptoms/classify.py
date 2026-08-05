@@ -46,7 +46,8 @@ from openai import OpenAI
 
 import case_file as cf
 
-JUDGE_MODEL = "anthropic/claude-haiku-4-5"
+JUDGE_MODEL = "openai/gpt-5.6-luna"
+TEMPERATURE = None
 LITELLM_BASE_URL = "https://litellm.labs.jb.gg"
 
 # Whether to attempt OpenAI-style structured output (response_format with a
@@ -296,10 +297,11 @@ def judge_one_symptom(client, case_file, symptom_name, model=JUDGE_MODEL):
     result = None
     if USE_STRUCTURED_OUTPUT:
         try:
-            response = client.chat.completions.create(
-                model=model, max_tokens=800, temperature=0, timeout=45.0,
-                messages=messages, response_format=SYMPTOM_JUDGMENT_SCHEMA,
-            )
+            kwargs = {"model": model, "max_tokens": 800, "timeout": 45.0,
+                    "messages": messages, "response_format": SYMPTOM_JUDGMENT_SCHEMA}
+            if TEMPERATURE is not None:
+                kwargs["temperature"] = TEMPERATURE
+            response = client.chat.completions.create(**kwargs)
             result = _parse_structured_response(response)
         except Exception:
             result = None  # fall through to plain-JSON prompting below
@@ -316,10 +318,11 @@ def judge_one_symptom(client, case_file, symptom_name, model=JUDGE_MODEL):
             ),
         }
         try:
-            response = client.chat.completions.create(
-                model=model, max_tokens=800, temperature=0, timeout=45.0,
-                messages=fallback_messages,
-            )
+            kwargs = {"model": model, "max_tokens": 800, "timeout": 45.0,
+                    "messages": fallback_messages}
+            if TEMPERATURE is not None:
+                kwargs["temperature"] = TEMPERATURE
+            response = client.chat.completions.create(**kwargs)
             result = _parse_structured_response(response)
         except Exception as e:
             result = {"error": str(e)}
