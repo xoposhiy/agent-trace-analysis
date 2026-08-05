@@ -57,9 +57,9 @@ a new module.
 - No abbreviations that are not already domain vocabulary. `session`, not
   `sess`. `response`, not `resp`. `transcript`, not `tr`. `agent_id` and
   `uuid` are fine — that is what the format calls them.
-- Booleans read as assertions: `is_subagent`, `has_summary`, `llm_available`.
+- Booleans read as assertions: `is_subagent`, `is_error`, `llm_available`.
 - Functions are verbs: `discover_sessions()`, `load_session()`. Values are
-  nouns: `pending_summaries`, `projects_root`.
+  nouns: `attributed_tokens`, `projects_root`.
 - A name that needs a comment to explain it is the wrong name. Fix the name.
 - Private module helpers take a leading underscore: `_parse_ts`, `_read_jsonl`.
 
@@ -156,6 +156,15 @@ Learned the hard way; do not rediscover them.
   does not appear in main transcripts at all.
 - **`toolUseResult.agentId`** is the direct parent -> subagent link. No scanning.
 - **Never sum `cache_read` into a user-facing token count.** See §4.
+- **`usage` belongs to a whole assistant message, not to one content block.**
+  It must be spread over every Event the message produced. Attributing it to
+  the message's prose alone gives every tool call 0 tokens and throws away the
+  usage of prose-free messages entirely — 55.8% of one real session.
+- **The bar's height must exceed the layout's own minimum**, or every block
+  renders at the 3px floor and the Y-axis selector silently does nothing.
+  `blocks.length * (MIN_BLOCK + GAP)` is the minimum, not a height.
+- **Anything the bar does not paint shows the track, never the page.** On this
+  dark theme an unpainted gap reads as a hole punched through the bar.
 - **Streamed assistant fragments share `message.id`** and must be merged, or one
   turn becomes a dozen phantom blocks.
 - **Project slugs are lossy** — Claude Code maps both `/` and `-` to `-`, so the

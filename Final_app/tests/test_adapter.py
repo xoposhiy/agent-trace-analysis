@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from Final_app.adapters import claude_code
 from Final_app.ir.models import EV_TOOL_USE, EV_USER
 
@@ -317,3 +319,109 @@ def test_unslug_renders_the_home_directory_itself(monkeypatch):
     monkeypatch.setattr("os.path.expanduser", lambda p: "/Users/tester")
 
     assert claude_code.unslug_project("-Users-tester") == "~"
+
+
+# ----------------------------------------------------------------------
+# Human prompts vs what the harness injects into the user role
+# ----------------------------------------------------------------------
+# Claude Code writes a skill's body, IDE context, slash-command echoes and
+# local command output as ``type: "user"`` lines with real text. Counting those
+# as human turns put skill activations on the bar as if the user had typed
+# them. ``promptSource`` cannot be used to tell them apart — real typed prompts
+# ("hi", "create new branch ...") are recorded as ``sdk`` in real transcripts.
+
+def test_an_injected_skill_body_is_not_a_human_prompt(claude_home: Path):
+    """The reported bug. Claude Code marks the injection with ``isMeta``."""
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "make me a chart", "2026-08-01T10:00:00.000Z"),
+        user_line("u2", "Base directory for this skill: /tmp/skills/dataviz\n"
+                        "# Data Visualization\nUse this skill when...",
+                  "2026-08-01T10:00:01.000Z", is_meta=True),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+    typed, injected = [e for e in session.events if e.type == EV_USER]
+
+    assert typed.is_human_prompt is True
+    assert injected.is_human_prompt is False
+
+
+def test_a_subagents_task_prompt_is_not_a_human_turn(
+    claude_home: Path, session_with_subagent: Path
+):
+    """A subagent has no human in its loop — ever.
+
+    Its transcript opens with a user-role line holding the task, but the
+    parent agent wrote that, not a person: verified against a real subagent
+    file, the line carries neither ``promptSource`` nor ``origin``, both of
+    which a typed prompt has. Counted as human it put a purple "chatting with
+    user" marker at the top of every subagent's bar, claiming an interruption
+    that never happened.
+    """
+    session = claude_code.load_session(PROJECT_SLUG, session_with_subagent)
+    child_prompts = [event for event in session.events
+                     if event.type == EV_USER and event.is_subagent]
+
+    assert child_prompts, "fixture must contain the child's task prompt"
+    assert all(not event.is_human_prompt for event in child_prompts)
+
+
+def test_the_parents_own_prompt_is_still_human(
+    claude_home: Path, session_with_subagent: Path
+):
+    """The subagent rule must not reach the main thread."""
+    session = claude_code.load_session(PROJECT_SLUG, session_with_subagent)
+    main_prompts = [event for event in session.events
+                    if event.type == EV_USER and not event.is_subagent]
+
+    assert [event.is_human_prompt for event in main_prompts] == [True]
+
+
+def test_a_subagents_task_prompt_stays_out_of_user_prompts(
+    claude_home: Path, session_with_subagent: Path
+):
+    """Otherwise the session's prompt list gains turns nobody typed."""
+    session = claude_code.load_session(PROJECT_SLUG, session_with_subagent)
+
+    assert session.user_prompts == ["Audit this repo"]
+
+
+@pytest.mark.parametrize("text", [
+    "<command-name>/model</command-name>",
+    "<local-command-stdout>Set model to Haiku</local-command-stdout>",
+    "<local-command-caveat>Caveat: the messages below...</local-command-caveat>",
+    "<ide_opened_file>The user opened /repo/a.py</ide_opened_file>",
+    "<ide_selection>The user selected lines 29 to 29</ide_selection>",
+    "<task-notification><task-id>abc</task-id></task-notification>",
+    "<system-reminder>remember the thing</system-reminder>",
+])
+def test_harness_machinery_is_not_a_human_prompt(claude_home: Path, text: str):
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", text, "2026-08-01T10:00:00.000Z"),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert session.events[0].is_human_prompt is False
+
+
+def test_a_prompt_recorded_as_sdk_is_still_human(claude_home: Path):
+    """``promptSource`` is not the signal — real typed prompts show as ``sdk``."""
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "create new branch 10-local-app-tool",
+                  "2026-08-01T10:00:00.000Z", prompt_source="sdk"),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert session.events[0].is_human_prompt is True
+
+
+def test_only_human_prompts_reach_user_prompts(claude_home: Path):
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "the real question", "2026-08-01T10:00:00.000Z"),
+        user_line("u2", "<command-name>/model</command-name>",
+                  "2026-08-01T10:00:01.000Z"),
+        user_line("u3", "Base directory for this skill: /tmp/s\nbody",
+                  "2026-08-01T10:00:02.000Z", is_meta=True),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert session.user_prompts == ["the real question"]

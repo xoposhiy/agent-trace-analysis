@@ -16,23 +16,16 @@ async function load() {
     session = await getJSON(`/api/sessions/${encodeURIComponent(sessionId)}`);
   } catch (error) {
     document.getElementById('title').textContent = 'Not found';
-    document.getElementById('summary').replaceChildren(
+    document.getElementById('meta').replaceChildren(
       el('div', 'error', error.message));
     return;
   }
 
+  // The title is Claude Code's own `ai-title` line — free, already on disk.
+  // There is deliberately no LLM-written summary beneath it.
   document.title = `${session.title || sessionId.slice(0, 8)} · TraceLens`;
   document.getElementById('title').textContent =
     session.title || sessionId.slice(0, 8);
-
-  const summary = document.getElementById('summary');
-  if (session.summary) {
-    summary.textContent = session.summary;
-  } else {
-    summary.textContent = 'no summary yet';
-    summary.style.fontStyle = 'italic';
-    summary.style.opacity = '0.65';
-  }
 
   const meta = document.getElementById('meta');
   meta.appendChild(el('span', 'sid', session.session_id));
@@ -41,7 +34,10 @@ async function load() {
   if (session.model) meta.appendChild(el('span', 'pill', session.model));
   meta.appendChild(el('span', null, `last message ${absoluteTime(session.last_ts)}`));
 
-  const tokenStat = stat('Tokens', formatNumber(session.tokens.working));
+  // "Context window", not "Tokens": this is input + output + cache writes —
+  // everything that passed through the model's context — and the blocks below
+  // divide exactly this figure between them.
+  const tokenStat = stat('Context window', formatNumber(session.tokens.working));
   tokenStat.title = `${session.tokens.total.toLocaleString()} including cache reads`
     + ` · in ${session.tokens.input.toLocaleString()}`
     + ` · out ${session.tokens.output.toLocaleString()}`
@@ -84,7 +80,18 @@ function showTip(block) {
 
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
-  facts.appendChild(el('span', null, `${formatNumber(block.tokens.working)} tokens`));
+
+  // The block's share of the context window, and what it is made of: what the
+  // model wrote here, versus what this block's tool results made the next call
+  // read back. For a Read the second number is nearly all of it.
+  const share = typeof block.attributed_tokens === 'number'
+    ? block.attributed_tokens : block.tokens.working;
+  const tokens = el('span', null, `${formatNumber(share)} tokens`);
+  tokens.title = `${share.toLocaleString()} tokens of the session's context window`
+    + ` · generated here ${block.tokens.output.toLocaleString()}`
+    + ` · billed to this block's message ${block.tokens.working.toLocaleString()}`;
+  facts.appendChild(tokens);
+
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   if (block.confidence !== null && block.confidence !== undefined) {
     facts.appendChild(el('span', null, `judge ${Math.round(block.confidence * 100)}%`));
@@ -107,15 +114,21 @@ function drawBar(session) {
   document.getElementById('block-count').textContent =
     `${blocks.length} blocks from ${session.message_count} events`;
 
-  // Tall enough that every block clears the 3px minimum (5px each with the
-  // gap), short enough to stay on one screen beside the detail pane — the
-  // sketch's proportions. Past ~170 blocks the minimums win and it grows.
-  const height = Math.max(420, Math.min(880, blocks.length * 5 + 40));
+  // The bar sizes itself (`barHeight`), and the column scrolls when the result
+  // is taller than the viewport. Capping it at one screen — as this did until
+  // 2026-08-05 — left no proportional space in the layout, so every block
+  // rendered at the 3px floor and the metric selector had no visible effect.
+  // A block opens in its own tab, so the bar stays where it is and several
+  // blocks can be compared side by side.
+  const openBlock = (_block, index) => {
+    window.open(`/session/${encodeURIComponent(sessionId)}/block/${index}`,
+      '_blank', 'noopener');
+  };
 
   const draw = () => renderBar(document.getElementById('bar'), blocks, {
     metric: select.value,
-    height,
     onHover: showTip,
+    onOpen: openBlock,
   });
 
   select.addEventListener('change', draw);

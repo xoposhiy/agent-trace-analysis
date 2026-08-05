@@ -103,7 +103,13 @@ def rule_kind(event: Event) -> Optional[str]:
     if event.type == EV_USER:
         # Only a real user prompt is "chatting with user". These are the thin,
         # rare markers on the bar — the moments the human intervened.
-        return USER_CHAT
+        #
+        # Claude Code puts a lot into the user role that the human never typed:
+        # a skill's body, IDE context, slash-command echoes, local command
+        # output. Those are the harness setting the agent up to work, so they
+        # read as coordination — marking them as the human speaking put skill
+        # activations on the bar as if the user had said them.
+        return USER_CHAT if event.is_human_prompt else COORDINATION
     if event.type == EV_ASSISTANT:
         # Assistant prose ("Let me check whether…") is coordination.
         #

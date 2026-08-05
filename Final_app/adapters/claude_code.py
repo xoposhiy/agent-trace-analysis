@@ -181,6 +181,150 @@ def _extract_tokens(usage: Any) -> Tokens:
     )
 
 
+# ----------------------------------------------------------------------
+# Token attribution
+# ----------------------------------------------------------------------
+
+# ``usage`` is reported once per assistant *message*, but a message becomes
+# several Events (prose plus one per tool call). Attributing the whole thing to
+# the prose Event — as this adapter did until 2026-08-05 — has two consequences,
+# both measured against a real 259-message transcript
+# (51db4d3e, ~/.claude/projects/...-Local-app):
+#
+#   * every tool call reported exactly 0 tokens, so the bar's "tokens" Y-axis
+#     sized read/write/execute blocks at nothing unless prose happened to be
+#     merged into them;
+#   * 105 of the 259 messages emitted tool calls with no prose at all, and their
+#     usage had nowhere to land, so it was dropped: 476,169 of 853,096 working
+#     tokens (55.8%) never reached the IR.
+#
+# So usage is now spread over the Events the message actually produced.
+
+
+def _content_weight(text: str) -> int:
+    """How much of a message's output a piece of content accounts for.
+
+    Character count, not a tokeniser: this only has to divide one already-known
+    output figure between siblings, and a tokeniser would be a dependency and a
+    per-line cost for a number that is a proportion either way.
+    """
+    return max(1, len(text))
+
+
+def _split_by_weight(amount: int, weights: list[int]) -> list[int]:
+    """Divide ``amount`` across ``weights``, exactly — no token invented or lost.
+
+    Largest-remainder: floor every share, then hand the rounding shortfall to
+    the largest fractional parts. Plain rounding would drift, and over a
+    300-message session the drift is what makes a session total stop matching
+    the sum of its blocks.
+    """
+    if not weights:
+        return []
+    total = sum(weights)
+    if total <= 0 or amount <= 0:
+        # Nothing to weigh by (or nothing to give): spread evenly so the sum
+        # still holds exactly.
+        base, extra = divmod(max(0, amount), len(weights))
+        return [base + (1 if i < extra else 0) for i in range(len(weights))]
+
+    shares = [amount * weight // total for weight in weights]
+    remainders = sorted(
+        range(len(weights)),
+        key=lambda i: (amount * weights[i]) % total,
+        reverse=True,
+    )
+    for i in remainders[: amount - sum(shares)]:
+        shares[i] += 1
+    return shares
+
+
+def _attribute_tokens(
+    events: list[Event],
+    message_events: dict[str, list[int]],
+    event_weights: dict[int, int],
+    message_usage: dict[str, Tokens],
+) -> Tokens:
+    """Push each message's usage onto its own Events. Returns what was orphaned.
+
+    ``output`` is split across the message's Events by content weight, because
+    output really was produced piece by piece. The prompt-side figures
+    (``input``, ``cache_read``, ``cache_creation``) are charged once, to the
+    message's first Event: they price the context the message was *given*, which
+    no individual content block is responsible for, and splitting them would
+    invite reading "this Edit cost 40k input tokens" off a block.
+
+    Orphaned usage — a message whose content was entirely thinking, so it
+    produced no Event — is returned rather than discarded. Rare but real: 1 of
+    106 messages in session 5f12bde3, 2,497 tokens.
+    """
+    orphaned = Tokens()
+    for message_key, usage in message_usage.items():
+        indices = message_events.get(message_key) or []
+        if not indices:
+            orphaned = orphaned + usage
+            continue
+
+        shares = _split_by_weight(
+            usage.output, [event_weights.get(i, 1) for i in indices]
+        )
+        for index, output in zip(indices, shares):
+            events[index].tokens = Tokens(output=output)
+
+        first = events[indices[0]]
+        first.tokens = Tokens(
+            input=usage.input,
+            output=first.tokens.output,
+            cache_read=usage.cache_read,
+            cache_creation=usage.cache_creation,
+        )
+    return orphaned
+
+
+# Keys of ``toolUseResult`` whose contents actually go back to the model. The
+# envelope also carries Claude Code's own bookkeeping, which never reaches the
+# prompt and must not be sized as if it did — across every transcript here:
+#
+#     file             7,086,778   the model sees it (a Read's contents)
+#     stdout             872,649   the model sees it
+#     content            550,888   the model sees it
+#     originalFile     1,236,808   local: the pre-edit file, for diffing
+#     structuredPatch    960,061   local: the computed diff
+#     newString/oldString 653,925  part of the Edit *call*, already counted there
+#
+# Counting the whole envelope inflated every Edit and made the estimated
+# content of a session exceed what it was billed — in session 15d437fe, 25,623
+# estimated against 20,644 fresh tokens, which starves the attribution ledger.
+_VISIBLE_RESULT_KEYS = ("file", "stdout", "stderr", "content")
+
+
+def _visible_result_size(envelope: Any, fallback_output: str) -> int:
+    """Characters of a tool result that the model actually reads back.
+
+    ``max`` rather than a sum, because the same payload is often present twice:
+    a Bash result appears both as the ``tool_result`` block's text and as
+    ``stdout`` in the envelope, while a Read's contents appear *only* in the
+    envelope. Taking the larger picks up the file body without double-counting
+    the command output.
+    """
+    if isinstance(envelope, str):
+        return max(len(envelope), len(fallback_output))
+    if not isinstance(envelope, dict):
+        return len(fallback_output)
+
+    visible = 0
+    for key in _VISIBLE_RESULT_KEYS:
+        value = envelope.get(key)
+        if value is None:
+            continue
+        try:
+            visible += len(value) if isinstance(value, str) else len(
+                json.dumps(value, default=str))
+        except (TypeError, ValueError):
+            continue
+    return max(visible, len(fallback_output))
+
+
 def _result_from_envelope(envelope: Any, fallback_output: str, is_error: bool) -> ToolResult:
     """Build a ToolResult from Claude Code's ``toolUseResult``.
 
@@ -192,6 +336,8 @@ def _result_from_envelope(envelope: Any, fallback_output: str, is_error: bool) -
       (also a bare string for some tools)
     """
     result = ToolResult(output=fallback_output, is_error=is_error)
+
+    result.size_chars = _visible_result_size(envelope, fallback_output)
 
     if isinstance(envelope, str):
         result.output = envelope or fallback_output
@@ -279,6 +425,59 @@ def _user_text(line: dict) -> str:
     return ""
 
 
+# Claude Code injects a great deal into the *user* role that the human never
+# typed: a skill's body, IDE context, slash-command echoes, local command
+# output. All of it is a ``type: "user"`` line with real text, so counting
+# every such line as "chatting with user" put skill activations on the bar as
+# if the human had said them.
+#
+# Two signals, both verified against every transcript here:
+#
+#   ``isMeta: true``  — image metadata, the local-command caveat, and the
+#                       skill body ("Base directory for this skill: ...").
+#   a machinery tag   — the text opens with one of the wrappers below.
+#
+# ``promptSource`` looks tempting and is *not* usable: real typed prompts
+# ("hi", "create new branch 10-local-app-tool") are recorded as ``sdk``, so
+# filtering on it would delete genuine human turns. ``origin.kind`` is absent
+# on 58 of 344 real prompts, so it cannot be required either.
+_MACHINE_PROMPT_TAGS = (
+    "<command-name>",
+    "<command-message>",
+    "<local-command-stdout>",
+    "<local-command-caveat>",
+    "<ide_opened_file>",
+    "<ide_selection>",
+    "<task-notification>",
+    "<system-reminder>",
+    "<bash-input>",
+    "<bash-stdout>",
+    "<bash-stderr>",
+)
+
+
+def is_human_prompt(line: dict, text: str, is_subagent: bool = False) -> bool:
+    """Did a person actually type this, or did Claude Code inject it?
+
+    ``is_subagent`` settles it on its own, and categorically rather than by
+    signal: a subagent has no human in its loop at any point. Its transcript
+    opens with a user-role line carrying the task, but the *parent agent* wrote
+    that. Checked against a real child transcript
+    (``agent-a0b679820a32f88c4.jsonl``): the line has neither ``promptSource``
+    nor ``origin``, both of which a typed prompt carries — but neither absence
+    is reliable enough to test for (see the note above), so the containment is
+    what decides.
+    """
+    if is_subagent:
+        return False
+    if line.get("isMeta"):
+        return False
+    if line.get("promptSource") == "system":
+        return False
+    stripped = text.lstrip()
+    return not stripped.startswith(_MACHINE_PROMPT_TAGS)
+
+
 def _is_tool_result_line(line: dict) -> bool:
     message = line.get("message")
     if not isinstance(message, dict):
@@ -320,6 +519,15 @@ def parse_transcript(
         "user_prompts": [],
         "compaction_points": [],
         "spawned": [],
+        # Usage from messages that produced no Event (thinking-only). Kept so
+        # the session total stays exact — see ``_attribute_tokens``.
+        "orphaned_tokens": Tokens(),
+        # Message ids that emitted a thinking block. Thinking is billed as
+        # output but its text is not stored (verified: the ``thinking`` field
+        # is empty in every transcript here), so its size is unknowable — and
+        # any message containing one is useless for calibrating characters per
+        # token, because part of what was billed is invisible.
+        "thinking_messages": set(),
     }
 
     # Pass 1: collect tool results and the ai-title, both of which are needed
@@ -346,6 +554,13 @@ def parse_transcript(
     # later fragment appends to it instead of creating a phantom block.
     prose_index: dict[str, int] = {}
     seen_tool_ids: set[str] = set()
+
+    # Bookkeeping for token attribution, resolved in one pass at the end (it
+    # cannot be done inline: a streamed message's final usage only arrives with
+    # its last fragment, by which time its earlier Events already exist).
+    message_events: dict[str, list[int]] = {}
+    event_weights: dict[int, int] = {}
+    message_usage: dict[str, Tokens] = {}
 
     for line in _read_jsonl(path):
         line_type = line.get("type")
@@ -381,11 +596,14 @@ def parse_transcript(
             text = _user_text(line)
             if not text.strip():
                 continue
-            meta["user_prompts"].append(text)
+            human = is_human_prompt(line, text, is_subagent=agent_id is not None)
+            if human:
+                meta["user_prompts"].append(text)
             events.append(Event(
                 uuid=uuid, ts=ts, type=EV_USER, vendor=VENDOR,
                 parent_uuid=parent_uuid, text=text,
                 agent_id=agent_id, depth=depth,
+                is_human_prompt=human,
             ))
             continue
 
@@ -402,6 +620,14 @@ def parse_transcript(
             meta["model"] = model
         tokens = _extract_tokens(message.get("usage"))
 
+        # Un-ided messages (rare, but they exist in older transcripts) get their
+        # own bucket per line so they are never conflated with each other.
+        message_key = message_id or f"uuid:{uuid}"
+        if tokens.total:
+            message_usage[message_key] = tokens  # cumulative; last fragment wins
+        else:
+            message_usage.setdefault(message_key, Tokens())
+
         content = message.get("content")
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
@@ -415,6 +641,7 @@ def parse_transcript(
 
             # (3) thinking never reaches the IR.
             if block_type in ("thinking", "redacted_thinking"):
+                meta["thinking_messages"].add(message_key)
                 continue
 
             if block_type == "text":
@@ -427,17 +654,19 @@ def parse_transcript(
                     existing = events[idx]
                     existing.text += text
                     existing.ts = ts
-                    if tokens.total:
-                        existing.tokens = tokens  # cumulative; last wins
+                    event_weights[idx] += _content_weight(text)
                     continue
                 events.append(Event(
                     uuid=uuid, ts=ts, type=EV_ASSISTANT, vendor=VENDOR,
                     parent_uuid=parent_uuid, message_id=message_id,
-                    model=model, tokens=tokens, text=text,
+                    model=model, tokens=Tokens(), text=text,
                     agent_id=agent_id, depth=depth,
                 ))
+                index = len(events) - 1
+                message_events.setdefault(message_key, []).append(index)
+                event_weights[index] = _content_weight(text)
                 if message_id:
-                    prose_index[message_id] = len(events) - 1
+                    prose_index[message_id] = index
                 continue
 
             if block_type == "tool_use":
@@ -450,23 +679,34 @@ def parse_transcript(
                 tool_input = block.get("input")
                 if not isinstance(tool_input, dict):
                     tool_input = {}
+                tool_name = str(block.get("name") or "")
                 events.append(Event(
                     uuid=uuid, ts=ts, type=EV_TOOL_USE, vendor=VENDOR,
                     parent_uuid=parent_uuid, message_id=message_id,
                     model=model,
-                    # Tokens belong to the message, not the call. Attributing
-                    # them to prose (above) keeps session totals exact; a tool
-                    # call carries none of its own.
+                    # Filled in by ``_attribute_tokens`` once the whole message
+                    # is known; a tool call is a real share of the output.
                     tokens=Tokens(),
                     tool=ToolCall(
                         id=tool_id,
-                        name=str(block.get("name") or ""),
+                        name=tool_name,
                         input=tool_input,
                         # (2) inline the result onto the call.
                         result=results_by_id.get(tool_id),
                     ),
                     agent_id=agent_id, depth=depth,
                 ))
+                index = len(events) - 1
+                message_events.setdefault(message_key, []).append(index)
+                # The call as the model emitted it: name plus arguments. The
+                # result is excluded — it is the tool's output, not the model's.
+                event_weights[index] = _content_weight(
+                    tool_name + json.dumps(tool_input, default=str)
+                )
+
+    meta["orphaned_tokens"] = _attribute_tokens(
+        events, message_events, event_weights, message_usage
+    )
 
     events.sort(key=lambda e: e.ts)
     return events, meta
@@ -480,6 +720,9 @@ def load_session(project_slug: str, path: Path, with_subagents: bool = True) -> 
     """Load one session, including its subagent transcripts."""
     events, meta = parse_transcript(path)
 
+    orphaned_tokens = meta["orphaned_tokens"]
+    thinking_messages = set(meta["thinking_messages"])
+
     subagent_ids: list[str] = []
     if with_subagents:
         described = {s["agent_id"]: s["description"] for s in meta["spawned"]}
@@ -491,6 +734,8 @@ def load_session(project_slug: str, path: Path, with_subagents: bool = True) -> 
                 continue
             subagent_ids.append(agent_id)
             events.extend(sub_events)
+            orphaned_tokens = orphaned_tokens + sub_meta["orphaned_tokens"]
+            thinking_messages |= sub_meta["thinking_messages"]
             if not meta["model"] and sub_meta["model"]:
                 meta["model"] = sub_meta["model"]
             described.setdefault(agent_id, "")
@@ -514,6 +759,8 @@ def load_session(project_slug: str, path: Path, with_subagents: bool = True) -> 
         compaction_points=meta["compaction_points"],
         user_prompts=meta["user_prompts"],
         subagent_ids=subagent_ids,
+        orphaned_tokens=orphaned_tokens,
+        thinking_message_ids=thinking_messages,
     )
     return session
 

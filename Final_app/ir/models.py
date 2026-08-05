@@ -5,7 +5,7 @@ level 1; everything above is computed from it.
 
 Level 1 ``Event``  — one normalised transcript line / tool call.
 Level 2 ``Block``  — one coloured rectangle on the session bar.
-Level 3 ``Session`` — one session: metadata, summary, blocks, totals.
+Level 3 ``Session`` — one session: metadata, blocks, totals.
 
 See ``DESIGN.md`` §4. The schema starts from Entire CLI's compact transcript
 format (``cli/cmd/entire/cli/transcript/compact/compact.go:27``, MIT) and adds
@@ -102,6 +102,15 @@ class ToolResult:
     file_path: str = ""
     num_lines: int = 0
 
+    # Characters in the *whole* result as Claude Code recorded it, including
+    # payload this IR deliberately does not keep. A ``Read``'s contents live in
+    # ``toolUseResult.file.content``, which ``output`` never carries: measured
+    # on a real transcript, ``output`` retains 183,415 of 5,011,535 result
+    # characters (3.7%), and the 4.6M missing are file bodies. Those bodies are
+    # what the next API call pays to read, so cost attribution needs their size
+    # even though the dashboard has no use for their text.
+    size_chars: int = 0
+
     # Set only on an ``Agent``/``Task`` spawn: the child's instance id, taken
     # from ``toolUseResult.agentId``. This is the parent -> subagent link, and
     # it is what anchors a subagent's block at the call that launched it.
@@ -113,6 +122,7 @@ class ToolResult:
             "is_error": self.is_error,
             "file_path": self.file_path,
             "num_lines": self.num_lines,
+            "size_chars": self.size_chars,
             "spawned_agent_id": self.spawned_agent_id,
         }
 
@@ -174,6 +184,26 @@ class Event:
     tool: Optional[ToolCall] = None
     text: str = ""
 
+    # For ``EV_USER`` only: did a person type this, or did Claude Code inject
+    # it into the user role? A skill's body, IDE context and slash-command
+    # echoes all arrive as user lines with real text, and counting them as
+    # "chatting with user" put skill activations on the bar as human turns.
+    # See ``adapters.claude_code.is_human_prompt``.
+    is_human_prompt: bool = True
+
+    # The measured size of this one content block, from ``analysis.tokens``.
+    # A different number from ``tokens``, on purpose: ``tokens`` is this
+    # Event's share of what the message was *billed* and sums to the session
+    # total; ``content_tokens`` is what this block alone tokenises to and does
+    # not. 0 means "not measured yet" (needs the VPN), never "empty".
+    content_tokens: int = 0
+
+    # This Event's share of the session's billed ``working`` tokens, placed by
+    # ``analysis.attribution`` on whatever caused the cost rather than on
+    # whichever Event came first in its message. Sums (with
+    # ``Session.overhead_tokens``) to ``Session.tokens.working`` exactly.
+    attributed_tokens: int = 0
+
     @property
     def is_subagent(self) -> bool:
         return self.agent_id is not None
@@ -189,10 +219,12 @@ class Event:
             "message_id": self.message_id,
             "model": self.model,
             "tokens": self.tokens.as_dict(),
+            "content_tokens": self.content_tokens,
             "agent_id": self.agent_id,
             "depth": self.depth,
             "tool": self.tool.as_dict() if self.tool else None,
             "text": self.text,
+            "is_human_prompt": self.is_human_prompt,
         }
 
 
@@ -222,6 +254,13 @@ class Block:
     description: str = ""
     inner_blocks: list["Block"] = field(default_factory=list)
 
+    # One entry per subagent this block covers, each carrying that agent's own
+    # ``inner_blocks``. Subagents spawned back to back are drawn as a single
+    # band (three parallel Explore agents are one act of delegation, not three
+    # stripes), so the band needs somewhere to keep them apart for the detail
+    # page. ``inner_blocks`` above stays flat because it is what the bar paints.
+    agents: list["Block"] = field(default_factory=list)
+
     @property
     def t_start(self) -> Optional[datetime]:
         return min((e.ts for e in self.events), default=None)
@@ -245,6 +284,43 @@ class Block:
         return total
 
     @property
+    def attributed_tokens(self) -> int:
+        """This block's share of the session's billed working tokens.
+
+        The honest "what did this stretch of work cost" figure: it includes
+        both what the model generated here and what this block's tool results
+        made the next call pay to read.
+        """
+        return sum(e.attributed_tokens for e in self.events)
+
+    @property
+    def content_tokens(self) -> int:
+        """Measured size of this block's own content. See ``Event``.
+
+        Every Event contributes its own measurement, so unlike ``tokens`` this
+        is not a share of anything — a one-step ``read`` block reports what
+        that single tool call actually tokenises to.
+        """
+        return sum(e.content_tokens for e in self.events)
+
+    @property
+    def content_tokens_measured(self) -> int:
+        """How many of this block's Events have a measurement yet."""
+        return sum(1 for e in self.events if e.content_tokens)
+
+    @property
+    def content_tokens_countable(self) -> int:
+        """How many of this block's Events *can* be measured.
+
+        Compaction markers have no content block, so a block of them is fully
+        measured at zero. Without this the UI could not tell "not counted yet"
+        from "nothing to count".
+        """
+        from Final_app.analysis.tokens import content_block
+
+        return sum(1 for e in self.events if content_block(e) is not None)
+
+    @property
     def message_count(self) -> int:
         return len(self.events)
 
@@ -259,8 +335,13 @@ class Block:
             "t_end": self.t_end.isoformat() if self.t_end else None,
             "duration_s": self.duration_s,
             "tokens": self.tokens.as_dict(),
+            "attributed_tokens": self.attributed_tokens,
+            "content_tokens": self.content_tokens,
+            "content_tokens_measured": self.content_tokens_measured,
+            "content_tokens_countable": self.content_tokens_countable,
             "message_count": self.message_count,
             "inner_blocks": [b.as_dict() for b in self.inner_blocks],
+            "agents": [b.as_dict() for b in self.agents],
         }
 
 
@@ -298,8 +379,10 @@ class Session:
     vendor: str = "claude-code"
     vendor_version: str = ""
 
+    # Claude Code's own generated title, from the transcript's ``ai-title``
+    # line. Free and already on disk — there is deliberately no LLM-written
+    # session summary alongside it.
     title: str = ""
-    summary: str = ""
 
     first_ts: Optional[datetime] = None
     last_ts: Optional[datetime] = None
@@ -312,6 +395,24 @@ class Session:
     user_prompts: list[str] = field(default_factory=list)
     subagent_ids: list[str] = field(default_factory=list)
 
+    # Usage from assistant messages that produced no Event — in practice, ones
+    # whose content was entirely ``thinking``, which the IR drops. Held here so
+    # the session total stays exact even though no block can show it. Rare:
+    # 1 message of 106 in real session 5f12bde3.
+    orphaned_tokens: Tokens = field(default_factory=Tokens)
+
+    # Billed working tokens no block caused: the system prompt and tool
+    # definitions the first call pays for. Held apart rather than smeared over
+    # the blocks, which would make the session's opening look enormous.
+    # See ``analysis.attribution``.
+    overhead_tokens: int = 0
+
+    # Message ids that emitted a thinking block. Thinking is billed as output
+    # but Claude Code stores the block with an empty body, so part of what was
+    # billed is invisible — those messages cannot be used to calibrate
+    # characters per token. See ``analysis.attribution.calibrate``.
+    thinking_message_ids: set = field(default_factory=set)
+
     @property
     def duration_s(self) -> float:
         if self.first_ts is None or self.last_ts is None:
@@ -323,7 +424,7 @@ class Session:
         total = Tokens()
         for e in self.events:
             total = total + e.tokens
-        return total
+        return total + self.orphaned_tokens
 
     @property
     def tool_calls(self) -> list[Event]:
@@ -349,7 +450,6 @@ class Session:
             "session_id": self.session_id,
             "project": self.project,
             "title": self.title,
-            "summary": self.summary,
             "model": self.model,
             "git_branch": self.git_branch,
             "first_ts": self.first_ts.isoformat() if self.first_ts else None,

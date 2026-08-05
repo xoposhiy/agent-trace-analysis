@@ -1,9 +1,10 @@
-# TraceLens — how the bar is built
+# TraceLens — design
 
 Local dashboard: reads Claude Code traces, draws each session as a vertical bar
-of coloured blocks.
+of coloured blocks, and drills down to what each block actually did.
 
-**Status:** session list and bar work. Problem detection not started.
+**Status:** session list, bar, block pages and subagent drill-down work.
+Problem detection not started.
 
 ---
 
@@ -19,22 +20,53 @@ of coloured blocks.
     3. MERGE      ->  Blocks   (neighbouring same-kind events join)
           |
     4. DRAW       ->  the vertical bar
+          |
+    5. DRILL      ->  block page -> subagent -> that agent's own bar
 ```
+
+## 0. The transcript format
+
+*What the app reads.*
+
+A session file is flat and append-only; the conversation tree lives in
+`parentUuid`. One line carries one content block — streaming writes `thinking`,
+`text` and each `tool_use` to separate lines sharing one `message.id` and
+repeating one identical `usage`.
+
+Cost lives only on assistant lines, at `message.usage`, in four buckets:
+`input`, `output`, `cache_creation`, `cache_read`. No dollar figure is recorded
+anywhere.
+
+Four identity levels, each addressing something different:
+
+| level | key | what it is |
+|---|---|---|
+| session | `sessionId` | one transcript file |
+| turn | human `user` line | one exchange |
+| API call | `message.id` | **the unit cost is reported for** |
+| line | `uuid` | one content block |
+
+Most lines are not Events. Attachments, tool-result carriers, thinking and
+system lines all carry a `uuid` and none becomes a block.
 
 ## 1. Parse
 
-Read the JSONL. Three things need care:
+*What the IR is built from.*
 
-- **Streamed replies arrive in pieces** sharing a `message.id` — merge them, or
-  one reply becomes a dozen fake blocks.
-- **Tool results are on a separate line** from the call — attach each result to
-  its call, so one tool call = one block.
-- **Subagents are in separate files** (`<session>/subagents/agent-*.jsonl`).
-  Load them, tag each event with its `agent_id`.
+`adapters/claude_code.py` turns raw lines into `Event`s: streamed fragments
+sharing a `message.id` merge into one reply, tool results inline into the call
+that produced them, and each subagent file
+(`<session>/subagents/agent-*.jsonl`) is loaded with every event tagged by
+`agent_id`.
+
+A user-role line inside a subagent is the task its parent handed it, never a
+human turn, so `is_human_prompt` is false throughout a subagent.
 
 ## 2. Classify
 
-**Most tools classify by name alone — no LLM:**
+*What decides a block's colour.*
+
+Most tools classify by name alone — no LLM:
 
 | kind | tools |
 |---|---|
@@ -42,77 +74,145 @@ Read the JSONL. Three things need care:
 | write | Edit, Write, MultiEdit |
 | coordination | TodoWrite, AskUserQuestion, plan mode |
 | subagent | Agent, Task |
-| chatting with user | a user message |
+| chatting with user | a *human* user message |
 
-Anything unrecognised → coordination. Coordination is the catch-all.
+Anything unrecognised is coordination, the catch-all.
 
-**`Bash` is the exception, and it's 39% of all tool calls.** The name tells you
-nothing — `cat foo.py` is a read, `pytest` is an execute, `cat > f <<'PY'` is a
-write. So Bash commands go to the **LLM judge**, which reads the command text
-and returns a kind.
-
-The judge is batched (one request per session) and cached forever by
-`hash(tool + input)`, so each distinct command is judged once ever. Without it,
-a word-list guess gets Bash right only 55% of the time.
+`Bash` is the exception and 39% of all tool calls: `cat foo.py` is a read,
+`pytest` an execute, `cat > f <<'PY'` a write. Bash commands go to an LLM judge
+that reads the command text. Batched one request per session and cached forever
+by `hash(tool + input)`, so a command is judged once ever.
 
 ## 3. Merge
 
-Two rules, both from the sketch:
+*What turns 3,000 events into a readable bar.*
 
-- **Neighbouring blocks of the same kind join into one.**
-  `read, read, read` → one read block.
-- **Coordination between two same-kind blocks is absorbed.**
-  `read, coordination, read` → one read block.
-  But `read, coordination, write` stays three — that coordination is a real
+- Neighbouring blocks of the same kind join into one.
+- Coordination between two same-kind blocks is absorbed;
+  `read, coordination, write` stays three, since that coordination is a real
   boundary.
+- A small coordination run ahead of work is its preamble and joins it
+  (`PREAMBLE_MAX_RATIO`).
+- Adjacent subagent containers become one band. `Block.agents` holds the
+  individual agents; `Block.inner_blocks` stays flat for the bar.
 
-Subagents don't merge into the timeline: each becomes one container block
-holding its own inner blocks.
+**Invariant:** no two adjacent blocks share a kind.
 
-**Invariant:** no two adjacent blocks ever share a kind.
+### Block labels
+
+`kind · subject · N steps · M failed`, capped at 80 characters with the subject
+capped separately at 44. The subject is the first of these available
+(`analysis/labels.py`):
+
+1. **Files touched, repetition counted** — `write · bar.js ×3`. Widely
+   scattered work is counted instead: `read · 6 files in 4 dirs`.
+2. **Bash's own `description` field** — `execute · Run tests and re-audit +3`.
+3. **Tool mix**, then prose for pure-coordination blocks.
 
 ## 4. Draw
 
-An SVG column. Each block's **height** is its share of the selected Y-axis
-metric (tokens / time / messages), with a 3px floor so nothing disappears.
-Switching the metric only changes heights — never order or colour.
+*What the bar shows.*
+
+An SVG column. Block **height** is its share of the selected Y-axis metric
+(tokens / time / messages) above a 3px floor; switching the metric changes only
+heights, never order or colour.
 
 - normal blocks — inset rectangles
-- subagents — full-width container with a ring, inner blocks drawn inside
+- subagents — solid, full width; width carries "delegated"
 - chatting with user — thin full-width marker
 
-Colours: green read, blue write, red execute, orange subagents, purple chat,
-grey coordination.
+The bar sizes itself to leave real proportional room and the column scrolls; it
+is not capped to a screen. Unpainted space always shows a filled track, never
+the page. A test renders every local session across all three metrics and
+asserts nothing is left unpainted beyond a 3px hairline.
 
----
+Colours are one hue per kind, validated for colour-blind separation on a dark
+surface. Chatting-with-user is a rule rather than a fill, so hue is never its
+only cue.
 
-## Notes worth keeping
+## 5. Drill down
 
-- **Never sum `cache_read` into a token count.** It's the prompt re-read every
-  message: one session showed 13.2M total, 12.5M of it cache reads. We show
-  `input + output + cache_creation`.
-- **The subagent tool is `Agent`, not `Task`** — keying on `Task` finds zero.
-- **Claude Code writes its own session title** (`ai-title` line) — free, no LLM.
-- **Everything degrades**: no key, no VPN, or a corrupt transcript, the page
-  still renders.
+*What clicking gives you.*
+
+```
+/session/<id>                              the session bar
+/session/<id>/block/<n>                    one block's steps
+/session/<id>/agent/<agentId>              that subagent's own bar
+/session/<id>/agent/<agentId>/block/<n>    one block of that bar
+```
+
+A block page lists each step: the file read, the command run with its full
+text, the result, whether it failed, and the API call it was billed to. A
+subagent band lists the agents under it, each linking to its own bar — same
+colours, same Y-axis selector, its own clickable blocks. A band's own step list
+shows the spawning calls only.
+
+Blocks are derived, not stored, so URLs are positional and every page states
+"block 12 of 105". Out-of-range indexes 404 with the real count. Step detail is
+fetched per block rather than shipped with the session, and long arguments and
+outputs are clipped with their full length reported.
+
+## How tokens are reported
+
+*What the numbers mean.*
+
+- **Cache reads are excluded.** `cache_read` is the prompt prefix re-read on
+  every call; the UI shows `input + output + cache_creation`, with the full
+  breakdown on hover.
+- **`usage` belongs to a message, not a content block.** One message's figure is
+  spread across the Events it produced: `output` by content weight, prompt-side
+  figures charged once. A per-step token number is therefore derived, not
+  measured.
+- **Attribution charges the cause.** A `Read` is charged for the file it pulled
+  into context. Block figures sum to the session header exactly.
+- **A result costs more than its call.** `ToolResult.size_chars` is what the
+  next API call pays to read back.
+
+## Provenance
+
+Cited from `adapters/claude_code.py` and `ir/models.py`.
+
+Four pieces of line-handling follow Entire CLI's compact transcript package
+(`cli/cmd/entire/cli/transcript/compact/compact.go`, MIT, © Entire Inc.),
+reimplemented in Python, each carrying an attribution comment naming its source
+line:
+
+| taken | source |
+|---|---|
+| merge streamed assistant fragments sharing `message.id` | `compact.go:432` |
+| inline tool results into their `tool_use` block | `compact.go:453` |
+| drop `thinking` / `redacted_thinking` blocks | `compact.go:685` |
+| enrich results from the `toolUseResult` envelope | `compact.go:552` |
+
+The IR schema starts from the same package's compact format (`compact.go:27`).
+
+Not taken: Entire's IR has no representation for subagents as separate
+transcripts, for `agent_id` as a parent→child link, or for cache tokens, and it
+compacts for a model to re-read rather than for a person to look at. Blocks,
+kinds, merge rules, attribution, labels and everything drawn are ours.
 
 ## Layout
 
 ```
 adapters/claude_code.py   1. parse
 analysis/classify.py      2. classify (rules + judge)
-analysis/blocks.py        3. merge
+analysis/blocks.py        3. merge + subagent banding
+analysis/labels.py           what a block calls itself
 web/bar.js                4. draw
+analysis/steps.py         5. per-step detail
+web/block.js  web/agent.js   the drill-down pages
 ir/models.py              Event / Block / Session
 api/app.py                FastAPI
 ```
 
-Tests: `pytest tests -q` — 152, offline, no VPN.
+Tests: `pytest tests -q` — 308, offline, no VPN. Plus 22 Node tests for the
+bar's layout maths (`tests/bar.test.js`, also run by pytest).
 
 ## Left to do
 
 1. Problem detection, the severity filter, the Problems tab
-2. The problem-specific pane
-3. Money as a Y-axis metric (needs a price table)
-4. Frontend tests for the bar's layout maths
+2. The problem-specific pane — a second bar beside the main one, anchored to
+   event `uuid` ranges rather than block indexes or timestamps
+3. Money as a Y-axis metric (needs a price table keyed by `message.model`)
+4. A richer hover readout
 5. Other vendors — the adapter boundary exists, only Claude Code is written

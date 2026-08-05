@@ -155,15 +155,7 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 
 .row-when { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
-.row-summary {
-  color: var(--muted);
-  margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.row-summary.empty { font-style: italic; opacity: 0.65; }
 
 .row-meta {
   display: flex;
@@ -190,6 +182,26 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
   color: var(--muted);
 }
 
+/* --- load more ----------------------------------------------------- */
+
+/* Paging is a deliberate click, not infinite scroll — each page costs the
+   server real transcript parsing. */
+.more {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.more:empty { display: none; }
+
+.more-count {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- states ------------------------------------------------------- */
 
 .empty-state, .error {
@@ -201,6 +213,29 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 }
 
 .error { border-color: #5c2b2b; color: #e08a8a; }
+
+/* The LLM banner is a left-aligned block with a heading, hints and a Retry
+   button — not the centred one-liner `.error` is otherwise used for. */
+.error-llm {
+  border-style: solid;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.error-title { font-weight: 550; }
+
+.error-hint { color: var(--muted); font-size: 12.5px; }
+
+.error-llm button.action { margin-top: 4px; }
+
+/* A working LLM says so. A missing banner would be indistinguishable from a
+   check that never ran. */
+.note-ok { border-left-color: #2f7a55; }
 
 .note {
   background: var(--panel);
@@ -220,7 +255,6 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 
 .detail-head { margin: 14px 0 20px; }
 .detail-head h2 { margin: 0 0 6px; font-size: 19px; font-weight: 600; }
-.detail-head .summary { color: var(--muted); }
 
 .stats {
   display: flex;
@@ -267,7 +301,15 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 
 /* --- the vertical bar --------------------------------------------- */
 
-.bar-col { position: sticky; top: 20px; }
+/* The bar is as tall as its block count needs (see `barHeight` in bar.js) and
+   scrolls inside a sticky column, rather than being squashed to one screen. */
+.bar-col {
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
 
 #bar svg { display: block; }
 
@@ -339,3 +381,170 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 }
 
 .swatch { display: block; flex: none; }
+
+/* --- block detail page --------------------------------------------- */
+/* Reached by clicking a block on the bar. The page is a vertical stack of
+   step cards rather than a table: a Bash command or a patch is the reason
+   someone opened it, and a table column would clip exactly that. */
+
+.section-h {
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  margin: 26px 0 14px;
+  padding-top: 16px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+}
+
+.step-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+/* Tabular so the numbers form a column the eye can run down, however many
+   digits a step index reaches. */
+.step-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  min-width: 22px;
+}
+
+.step-title { font-weight: 550; word-break: break-word; }
+
+.step-when { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+.step-facts {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 14px;
+  margin: 7px 0 0 22px;
+}
+
+.step-text {
+  border-left: 2px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  margin: 9px 0 0 22px;
+  padding-left: 10px;
+}
+
+/* --- arguments and results ------------------------------------------ */
+
+.args { margin: 9px 0 0 22px; }
+
+.arg { display: flex; gap: 10px; margin-bottom: 6px; }
+
+.arg-k {
+  color: var(--muted);
+  flex: none;
+  font-size: 12px;
+  padding-top: 2px;
+  width: 92px;
+}
+
+.arg-v, .result-body {
+  background: var(--panel-2);
+  border-radius: 6px;
+  flex: 1;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 7px 9px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.result { margin: 9px 0 0 22px; }
+
+/* A failed step is marked by the rail as well as the word, so the failure
+   survives being read in greyscale. */
+.result-error { border-left: 2px solid #d64545; padding-left: 8px; }
+
+.result-head {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+.result-k { letter-spacing: 0.03em; text-transform: uppercase; }
+
+.result-error .result-k { color: #d64545; }
+
+.result-body { max-height: 260px; overflow-y: auto; }
+
+/* Says the text is a prefix. Without it a clipped command reads as a
+   complete one, which is worse than showing nothing. */
+.clipped { color: var(--muted); font-style: italic; }
+
+.muted { color: var(--muted); font-size: 12px; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* --- subagent cards -------------------------------------------------- */
+
+.agent {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid #e59400;
+  border-radius: 8px;
+  margin-bottom: 14px;
+  padding: 13px 15px;
+}
+
+.agent-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; }
+
+.agent-n { color: #e59400; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.agent-title { font-weight: 550; }
+
+/* The agent's own steps are inset, so a band covering three agents reads as
+   three groups rather than one long list. */
+.agent-steps { margin-top: 12px; padding-left: 12px; }
+
+.agent-steps .step { background: var(--panel-2); }
+
+.pill-error { background: rgba(214, 69, 69, 0.16); color: #ef8080; }
+
+/* A subagent card is a link to that agent's own bar. Styled as a card rather
+   than inline text because it is the primary action of a delegation page. */
+.agent-link {
+  color: inherit;
+  display: block;
+  text-decoration: none;
+  transition: border-color 0.12s ease;
+}
+
+.agent-link:hover, .agent-link:focus {
+  border-color: #e59400;
+  outline: none;
+}
+
+.agent-go {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.agent-link:hover .agent-go, .agent-link:focus .agent-go { color: #e59400; }
+
+.kind-subagent { background: rgba(229, 148, 0, 0.16); color: #e5a63a; }

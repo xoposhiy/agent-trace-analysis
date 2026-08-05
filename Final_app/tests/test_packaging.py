@@ -33,10 +33,10 @@ def test_every_submodule_is_importable_under_the_package_name() -> None:
     from Final_app.adapters import claude_code
     from Final_app.analysis import blocks, classify
     from Final_app.api import app as api
+    from Final_app.analysis import attribution
     from Final_app.ir import models
-    from Final_app.judge import summary
 
-    modules = [claude_code, blocks, classify, api, models, summary]
+    modules = [claude_code, blocks, classify, attribution, api, models]
     assert [module.__name__.split(".")[0] for module in modules] == [
         Final_app.__name__
     ] * 6

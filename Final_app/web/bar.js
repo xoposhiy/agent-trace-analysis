@@ -22,11 +22,20 @@
 //     here *only* because purple is never drawn as a fill: chatting-with-user
 //     is a 5px full-width marker, so it never appears as a same-shape block
 //     beside a blue one. Form carries the distinction, per the skill's
-//     secondary-encoding allowance. Same for orange↔red: orange is only ever a
-//     container ring.
-//     Restricted to the four kinds that DO render as identical fills
-//     (read/write/execute/coordination) the worst CVD pair is 6.2 and
-//     normal-vision 18.0.
+//     secondary-encoding allowance.
+//     Orange used to rely on the same argument, back when a subagent was drawn
+//     as a translucent ring around its children. It is now a solid fill like
+//     any other kind, so the pair was re-checked rather than assumed:
+//
+//       node validate_palette.js "#d64545,#e59400" --mode dark --pairs all
+//       [PASS] CVD separation  #e59400↔#d64545  ΔE 14.7 deutan · 15.7 tritan
+//
+//     It clears the floor twice over, so orange needs no help from form. It
+//     keeps the full-bar width anyway, because that is what says "delegated"
+//     rather than "one more colour in the sequence".
+//     Restricted to the five kinds that render as fills
+//     (read/write/execute/coordination/subagent) the worst CVD pair is still
+//     red↔green at 6.2 — see note 2 — and normal-vision 18.0.
 //
 //  2. The green is deliberately teal-leaning (#199e70) rather than a "true"
 //     green. With red in the palette a true green (#2f9e44) drops the red↔green
@@ -41,7 +50,12 @@ const KIND_STYLE = {
   write:        { fill: '#3987e5', label: 'write' },
   execute:      { fill: '#d64545', label: 'execute' },
   coordination: { fill: '#a3adbb', label: 'coordination' },
-  subagent:     { fill: '#e59400', label: 'subagents', container: true },
+  // `wide` spans the full bar instead of sitting inset: delegated work reads
+  // as a band across the timeline rather than one more step in the sequence.
+  // It is a solid fill, not a ring around its children — a run of subagents is
+  // one act of delegation, and drawing each child inside it made a 12px block
+  // into a stack of 2px slivers nobody could read or click.
+  subagent:     { fill: '#e59400', label: 'subagents', wide: true },
   user_chat:    { fill: '#ad5fc9', label: 'chatting with user', marker: true },
 };
 
@@ -51,10 +65,28 @@ const KIND_ORDER = ['read', 'write', 'execute', 'coordination', 'subagent', 'use
 
 const BAR_WIDTH = 46;      // full width; contained blocks are inset
 const INSET = 7;           // how far a normal block sits inside the bar
-const GAP = 2;             // the surface gap the mark spec requires between fills
+const GAP = 1;             // separation between fills
 const MIN_BLOCK = 3;       // no block is ever invisible, however small
 const MARKER_HEIGHT = 5;   // "chatting with user" and compaction rules
 const RADIUS = 2;
+
+// A "chatting with user" block paints a 5px rule, so any slot taller than this
+// is space it reserves and never fills. It is therefore laid out at a fixed
+// size instead of taking a metric share: with 27 of them in a real 239-block
+// session, metric-sized marker slots were a leading source of apparent holes
+// in the bar.
+const MARKER_SLOT = MARKER_HEIGHT + 2;
+
+// How much room the proportional part of the layout gets, over and above the
+// per-block minimum. Without a real budget here the metric selector does
+// nothing: the old height (`blocks * 5 + 40`, with MIN_BLOCK 3 and GAP 2) asked
+// for exactly the minimum the layout needed, leaving 0-42px of flexible space
+// for the whole bar — measured on six real sessions, every block came out at
+// the 3px floor whichever metric was chosen, and sessions past ~170 blocks
+// overflowed the viewBox and were clipped.
+const FLEX_PER_BLOCK = 7;
+const FLEX_MIN = 340;
+const FLEX_MAX = 1100;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -72,28 +104,75 @@ function svgEl(tag, attrs) {
 // to its metric. Pure proportional sizing makes a 1-event block vanish next to
 // a 17-event one; pure equal sizing throws away the magnitude the Y-axis
 // selector exists to show. This keeps both readable.
+//
+// Markers sit outside the proportional split entirely (see MARKER_SLOT).
 function layoutBlocks(blocks, metric, totalHeight) {
   if (!blocks.length) return [];
 
-  const values = blocks.map((block) => Math.max(0, blockMetric(block, metric)));
+  const isFixed = blocks.map((block) => isMarker(block));
+  const values = blocks.map((block, index) =>
+    isFixed[index] ? 0 : Math.max(0, blockMetric(block, metric)));
   const sum = values.reduce((a, b) => a + b, 0);
+  const flexCount = isFixed.filter((fixed) => !fixed).length;
 
-  const fixed = blocks.length * MIN_BLOCK + (blocks.length - 1) * GAP;
-  const flexible = Math.max(0, totalHeight - fixed);
+  const reserved = blocks.reduce((acc, _, index) =>
+    acc + (isFixed[index] ? MARKER_SLOT : MIN_BLOCK), 0)
+    + (blocks.length - 1) * GAP;
+  const flexible = Math.max(0, totalHeight - reserved);
 
   let y = 0;
   return blocks.map((block, index) => {
-    const share = sum > 0 ? values[index] / sum : 1 / blocks.length;
-    const height = MIN_BLOCK + flexible * share;
+    let height;
+    if (isFixed[index]) {
+      height = MARKER_SLOT;
+    } else {
+      const share = sum > 0
+        ? values[index] / sum
+        : (flexCount ? 1 / flexCount : 0);
+      height = MIN_BLOCK + flexible * share;
+    }
     const box = { block, y, height };
     y += height + GAP;
     return box;
   });
 }
 
+// The height the bar needs so that the metric actually drives block sizes.
+// Returned rather than clamped to a screenful on purpose: a 359-block session
+// cannot honour a 3px floor inside 880px, and silently squashing it is what
+// produced a bar of uniform 3px slivers. The column scrolls instead.
+function barHeight(blocks) {
+  if (!blocks.length) return FLEX_MIN;
+  const reserved = blocks.reduce((acc, block) =>
+    acc + (isMarker(block) ? MARKER_SLOT : MIN_BLOCK), 0)
+    + (blocks.length - 1) * GAP;
+
+  // Only non-markers can absorb proportional space — a marker paints its 5px
+  // rule whatever slot it is given. Asking for a flexible budget no block can
+  // spend leaves the whole of it as bare track: session d55c0e89 is a single
+  // `user_chat` block, and rendered as 6px of rule in a 347px bar on all three
+  // metrics, which reads as the bar being one long hole.
+  if (!blocks.some((block) => !isMarker(block))) return Math.round(reserved);
+
+  const flexible = Math.min(FLEX_MAX,
+    Math.max(FLEX_MIN, blocks.length * FLEX_PER_BLOCK));
+  return Math.round(reserved + flexible);
+}
+
+function isMarker(block) {
+  const style = KIND_STYLE[block.kind];
+  return Boolean(style && style.marker);
+}
+
 function blockMetric(block, metric) {
   if (metric === 'time') return block.duration_s;
   if (metric === 'messages') return block.message_count;
+  // `attributed_tokens`, not `tokens.working`: the latter charges a message's
+  // whole prompt-side cost to whichever Event came first in it, which put
+  // 325,412 tokens on a single `Read` that did not cause any of them. The
+  // attributed figure divides the same total across whatever caused it, and
+  // still sums to the header exactly. Older payloads fall back.
+  if (typeof block.attributed_tokens === 'number') return block.attributed_tokens;
   return block.tokens.working;
 }
 
@@ -101,14 +180,16 @@ function blockMetric(block, metric) {
 
 function renderBar(container, blocks, options) {
   const metric = (options && options.metric) || 'tokens';
-  const height = (options && options.height) || 700;
   const onHover = options && options.onHover;
+  const onOpen = options && options.onOpen;
 
   container.replaceChildren();
   if (!blocks.length) {
     container.appendChild(el('div', 'placeholder', 'No blocks'));
     return;
   }
+
+  const height = (options && options.height) || barHeight(blocks);
 
   const svg = svgEl('svg', {
     width: BAR_WIDTH,
@@ -118,43 +199,38 @@ function renderBar(container, blocks, options) {
     'aria-label': `Session activity, ${blocks.length} blocks, sized by ${metric}`,
   });
 
-  // The bar outline, as in the sketch.
+  // A filled track, not just an outline. Whatever the layout does not paint —
+  // the gaps between fills, the slack around a marker rule — shows this rather
+  // than the page background, which on this dark theme read as black holes
+  // punched through the bar.
   svg.appendChild(svgEl('rect', {
     x: 0.5, y: 0.5, width: BAR_WIDTH - 1, height: height - 1,
-    rx: 4, fill: 'none', stroke: 'var(--line)',
+    rx: 4, fill: 'var(--panel-2)', stroke: 'var(--line)',
   }));
 
-  layoutBlocks(blocks, metric, height).forEach(({ block, y, height: h }) => {
-    svg.appendChild(renderBlock(block, y, h, metric, onHover));
+  layoutBlocks(blocks, metric, height).forEach(({ block, y, height: h }, index) => {
+    svg.appendChild(renderBlock(block, y, h, metric, onHover, onOpen, index));
   });
 
   container.appendChild(svg);
 }
 
-function renderBlock(block, y, height, metric, onHover) {
+function renderBlock(block, y, height, metric, onHover, onOpen, index) {
   const style = KIND_STYLE[block.kind] || KIND_STYLE.coordination;
-  const group = svgEl('g', { class: 'blk', tabindex: '0' });
+  const group = svgEl('g', {
+    class: onOpen ? 'blk blk-open' : 'blk',
+    tabindex: '0',
+    // A block opens its own page, so it is a link — announced as one, and
+    // reachable by keyboard, not only by a mouse that can hit a 3px target.
+    role: onOpen ? 'link' : 'img',
+    'aria-label': `${block.label}, block ${index + 1}`,
+  });
 
-  if (style.container) {
-    // Subagents: a full-width band holding their own blocks, so delegated work
-    // reads as nested rather than as one more colour in the sequence.
+  if (style.wide) {
     group.appendChild(svgEl('rect', {
       x: 1, y, width: BAR_WIDTH - 2, height,
-      rx: RADIUS, fill: style.fill, 'fill-opacity': 0.28,
-      stroke: style.fill, 'stroke-width': 1.5,
+      rx: RADIUS, fill: style.fill,
     }));
-    const inner = block.inner_blocks || [];
-    if (inner.length && height > 10) {
-      layoutBlocks(inner, metric, height - 8).forEach((child) => {
-        const childStyle = KIND_STYLE[child.block.kind] || KIND_STYLE.coordination;
-        group.appendChild(svgEl('rect', {
-          x: INSET + 2, y: y + 4 + child.y,
-          width: BAR_WIDTH - 2 * (INSET + 2),
-          height: Math.max(2, child.height),
-          rx: 1, fill: childStyle.fill,
-        }));
-      });
-    }
   } else if (style.marker) {
     // A thin full-width rule: the human interrupting, not a stretch of work.
     group.appendChild(svgEl('rect', {
@@ -182,6 +258,18 @@ function renderBlock(block, y, height, metric, onHover) {
     group.addEventListener('mouseleave', () => onHover(null));
     group.addEventListener('blur', () => onHover(null));
   }
+
+  if (onOpen) {
+    group.addEventListener('click', () => onOpen(block, index));
+    // Enter and Space, because the group is a link by role but an SVG element
+    // by nature: neither key activates it for free the way they would on <a>.
+    group.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        onOpen(block, index);
+      }
+    });
+  }
   return group;
 }
 
@@ -197,11 +285,12 @@ function renderLegend(container, counts) {
     const item = el('span', 'legend-item' + (count ? '' : ' legend-item-off'));
 
     const swatch = svgEl('svg', { width: 14, height: 14, class: 'swatch' });
-    if (style.container) {
+    if (style.wide) {
+      // Full width, matching how the bar draws it — the swatch carries the
+      // shape as well as the colour, since shape is what separates a
+      // delegation band from an ordinary block.
       swatch.appendChild(svgEl('rect', {
-        x: 1, y: 1, width: 12, height: 12, rx: 2,
-        fill: style.fill, 'fill-opacity': 0.28,
-        stroke: style.fill, 'stroke-width': 1.5,
+        x: 0, y: 1, width: 14, height: 12, rx: 2, fill: style.fill,
       }));
     } else if (style.marker) {
       swatch.appendChild(svgEl('rect', {

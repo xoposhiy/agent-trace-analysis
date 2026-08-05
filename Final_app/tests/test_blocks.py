@@ -104,6 +104,72 @@ def test_todowrite_is_coordination_not_a_write():
     assert classify.rule_kind(tool_event(0, "TodoWrite")) == COORDINATION
 
 
+# ----------------------------------------------------------------------
+# Only a person is "chatting with user"
+# ----------------------------------------------------------------------
+# Claude Code injects into the *user* role a great deal the human never typed:
+# a skill's body, IDE context, slash-command echoes, local command output. All
+# of it is a ``type: "user"`` line with real text, so treating every one as a
+# human turn put skill activations on the bar as if the user had said them.
+
+def _user_event(offset: int, text: str, human: bool = True) -> Event:
+    return Event(uuid=f"u{offset}",
+                 ts=BASE_TIME + timedelta(seconds=offset),
+                 type=EV_USER, text=text, is_human_prompt=human)
+
+
+def test_an_injected_skill_body_is_not_the_user_talking():
+    """The reported bug: activating a skill showed up as a human turn."""
+    skill = _user_event(0, "Base directory for this skill: /tmp/skills/dataviz\n"
+                           "# Data Visualization\nUse this skill when...",
+                        human=False)
+
+    assert classify.rule_kind(skill) == COORDINATION
+
+
+@pytest.mark.parametrize("text", [
+    "<command-name>/model</command-name>",
+    "<local-command-stdout>Set model to Haiku</local-command-stdout>",
+    "<ide_opened_file>The user opened /repo/a.py</ide_opened_file>",
+    "<task-notification><task-id>abc</task-id></task-notification>",
+    "<system-reminder>remember the thing</system-reminder>",
+])
+def test_harness_machinery_in_the_user_role_is_coordination(text: str):
+    assert classify.rule_kind(_user_event(0, text, human=False)) == COORDINATION
+
+
+def test_a_real_prompt_is_still_the_user_talking():
+    assert classify.rule_kind(_user_event(0, "fix the login bug")) == USER_CHAT
+
+
+def test_injected_lines_do_not_split_a_run_of_work():
+    """As coordination they absorb, so a skill activation mid-read is invisible.
+
+    As ``user_chat`` each one was a full-width marker cutting the bar in two.
+    """
+    session = _session([
+        tool_event(0, "Read", {"file_path": "/a.py"}),
+        _user_event(1, "<command-name>/model</command-name>", human=False),
+        tool_event(2, "Read", {"file_path": "/b.py"}),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [READ]
+    assert blocks[0].message_count == 3
+
+
+def test_a_real_prompt_still_breaks_a_run_of_work():
+    """The human interrupting is a real boundary and must stay visible."""
+    session = _session([
+        tool_event(0, "Read", {"file_path": "/a.py"}),
+        _user_event(1, "wait, do the other file first"),
+        tool_event(2, "Read", {"file_path": "/b.py"}),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [READ, USER_CHAT, READ]
+
+
 def test_user_messages_are_chatting_with_user():
     assert classify.rule_kind(user_event(0)) == USER_CHAT
 
@@ -190,6 +256,119 @@ def test_trailing_coordination_is_its_own_block():
     blocks = merge_neighbours(_kinded((0, READ), (1, COORDINATION)))
 
     assert kinds_of(blocks) == [READ, COORDINATION]
+
+
+# ----------------------------------------------------------------------
+# Preamble absorption
+# ----------------------------------------------------------------------
+# A coordination run that is small next to the work it introduces is the agent
+# announcing the call, not a step of its own. Measured over 407 such pairs in
+# real sessions: coordination is 5.4% the size of the run it precedes at p25
+# and 61.7% at p75, so preambles and substantive analysis separate cleanly.
+# See ``blocks.PREAMBLE_MAX_RATIO``.
+
+def _big_write(offset: int, size: int = 4000) -> Event:
+    """A Write whose payload dwarfs any sentence introducing it."""
+    return tool_event(offset, "Write",
+                      {"file_path": "/repo/a.py", "content": "x" * size})
+
+
+def test_a_short_preamble_joins_the_work_it_introduces():
+    session = _session([
+        prose_event(0, "Now the bar rewrite:"),
+        _big_write(1),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 2
+
+
+def test_the_reported_pattern_collapses_to_one_block():
+    """coordination + X + coordination + X, all four, becomes one X."""
+    session = _session([
+        prose_event(0, "Now the bar rewrite:"),
+        _big_write(1),
+        prose_event(2, "And the session page:"),
+        _big_write(3),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 4
+
+
+def test_substantial_coordination_is_not_swallowed_by_the_next_call():
+    """Real analysis stays its own block, however small the call after it."""
+    session = _session([
+        prose_event(0, "The measurement says otherwise. " * 40),
+        # A tiny call: ``pytest`` rather than ``ls``, since a read-only command
+        # would classify as READ and stop this testing what it says it does.
+        tool_event(1, "Bash", {"command": "pytest"}),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [COORDINATION, EXECUTE]
+
+
+def test_a_preamble_joins_the_next_kind_not_the_previous_one():
+    """The sentence introduces the write; it is not the tail of the read."""
+    session = _session([
+        tool_event(0, "Read", {"file_path": "/a.py"}),
+        prose_event(1, "Now the fix:"),
+        _big_write(2),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [READ, WRITE]
+    assert blocks[1].message_count == 2, "the prose should sit with the write"
+
+
+def test_a_boundary_that_carries_real_content_still_survives():
+    """Absorption must not erase every transition — only the announcements."""
+    session = _session([
+        tool_event(0, "Read", {"file_path": "/a.py"}),
+        prose_event(1, "That rules out the parser. " * 30),
+        tool_event(2, "Bash", {"command": "pytest"}),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [READ, COORDINATION, EXECUTE]
+
+
+def test_trailing_coordination_has_nothing_to_join():
+    session = _session([
+        _big_write(0),
+        prose_event(1, "Done."),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [WRITE, COORDINATION]
+
+
+def test_a_preamble_is_never_folded_into_the_users_turn():
+    """A human message is not something the agent was preparing for."""
+    session = _session([
+        prose_event(0, "Ok."),
+        Event(uuid="u1", ts=BASE_TIME + timedelta(seconds=1), type=EV_USER,
+              text="and now do the other thing, here is a long follow-up " * 5),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [COORDINATION, USER_CHAT]
+
+
+def test_absorbing_a_preamble_loses_no_event_and_no_tokens():
+    session = _session([
+        prose_event(0, "Now the bar rewrite:"),   # 25 output tokens
+        _big_write(1),
+        prose_event(2, "And the session page:"),  # 25 output tokens
+        _big_write(3),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert sum(b.message_count for b in blocks) == 4
+    assert blocks[0].tokens.output == 50
 
 
 def test_several_coordination_events_absorb_as_one_group():
@@ -530,9 +709,9 @@ def test_subagent_events_are_excluded_from_the_parents_own_blocks():
     assert all(not e.is_subagent for b in main for e in b.events)
 
 
-def test_each_subagent_gets_its_own_description():
-    """Matching on the first Agent call would label every child identically."""
-    session = _session([
+def _session_with_two_subagents() -> Session:
+    """Two agents spawned back to back — the ordinary fan-out shape."""
+    return _session([
         tool_event(0, "Agent", {"description": "First task"},
                    spawned_agent_id="agent-1"),
         tool_event(1, "Read", {"file_path": "/a"}, agent_id="agent-1"),
@@ -540,11 +719,102 @@ def test_each_subagent_gets_its_own_description():
                    spawned_agent_id="agent-2"),
         tool_event(3, "Read", {"file_path": "/b"}, agent_id="agent-2"),
     ])
-    containers = {b.agent_id: b for b in build_blocks(session, use_judge=False)
-                  if b.kind == SUBAGENT}
 
-    assert containers["agent-1"].description == "First task"
-    assert containers["agent-2"].description == "Second task"
+
+def test_each_subagent_gets_its_own_description():
+    """Matching on the first Agent call would label every child identically."""
+    blocks = build_blocks(_session_with_two_subagents(), use_judge=False)
+    band = next(b for b in blocks if b.kind == SUBAGENT)
+    described = {agent.agent_id: agent.description for agent in band.agents}
+
+    assert described == {"agent-1": "First task", "agent-2": "Second task"}
+
+
+# ----------------------------------------------------------------------
+# Grouping adjacent subagents
+# ----------------------------------------------------------------------
+# Spawning three agents in one message is one act of delegation. Drawn as
+# three separate stripes it reads as three separate decisions, so a run of
+# adjacent containers becomes a single band and the agents survive inside it.
+
+def test_subagents_spawned_back_to_back_become_one_band():
+    blocks = build_blocks(_session_with_two_subagents(), use_judge=False)
+    bands = [b for b in blocks if b.kind == SUBAGENT]
+
+    assert len(bands) == 1
+    assert len(bands[0].agents) == 2
+
+
+def test_a_band_keeps_every_agents_steps_for_the_bar_to_paint():
+    blocks = build_blocks(_session_with_two_subagents(), use_judge=False)
+    band = next(b for b in blocks if b.kind == SUBAGENT)
+
+    # `inner_blocks` stays flat — it is what the bar draws inside the band —
+    # while `agents` keeps the same work split per agent.
+    assert len(band.inner_blocks) == 2
+    assert [len(agent.inner_blocks) for agent in band.agents] == [1, 1]
+
+
+def test_a_band_of_several_agents_has_no_single_agent_id():
+    blocks = build_blocks(_session_with_two_subagents(), use_judge=False)
+    band = next(b for b in blocks if b.kind == SUBAGENT)
+
+    # Claiming one of the two would silently mislabel the other.
+    assert band.agent_id is None
+    assert "2 agents" in band.label
+
+
+def test_a_lone_subagent_is_still_wrapped_as_a_band_of_one():
+    """So the detail page has one shape to render, not two."""
+    blocks = build_blocks(_session_with_subagent(), use_judge=False)
+    band = next(b for b in blocks if b.kind == SUBAGENT)
+
+    assert len(band.agents) == 1
+    # A band of one keeps the agent's identity, so nothing is lost by wrapping.
+    assert band.agent_id == "agent-1"
+    assert band.description == "Find TODOs"
+
+
+def test_subagents_separated_by_other_work_stay_separate_bands():
+    """Two delegations twenty blocks apart are two decisions, not one."""
+    session = _session([
+        tool_event(0, "Agent", {"description": "First"},
+                   spawned_agent_id="agent-1"),
+        tool_event(1, "Read", {"file_path": "/a"}, agent_id="agent-1"),
+        tool_event(2, "Bash", {"command": "pytest"}),
+        tool_event(3, "Agent", {"description": "Second"},
+                   spawned_agent_id="agent-2"),
+        tool_event(4, "Read", {"file_path": "/b"}, agent_id="agent-2"),
+    ])
+    bands = [b for b in build_blocks(session, use_judge=False)
+             if b.kind == SUBAGENT]
+
+    assert len(bands) == 2
+    assert [len(band.agents) for band in bands] == [1, 1]
+
+
+def test_grouping_does_not_swallow_the_work_between_two_bands():
+    session = _session([
+        tool_event(0, "Agent", {"description": "First"},
+                   spawned_agent_id="agent-1"),
+        tool_event(1, "Read", {"file_path": "/a"}, agent_id="agent-1"),
+        tool_event(2, "Bash", {"command": "pytest"}),
+        tool_event(3, "Agent", {"description": "Second"},
+                   spawned_agent_id="agent-2"),
+        tool_event(4, "Read", {"file_path": "/b"}, agent_id="agent-2"),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [SUBAGENT, EXECUTE, SUBAGENT]
+
+
+def test_a_band_covers_every_event_of_the_agents_it_holds():
+    """Nothing is dropped by the merge — the band is the sum of its agents."""
+    blocks = build_blocks(_session_with_two_subagents(), use_judge=False)
+    band = next(b for b in blocks if b.kind == SUBAGENT)
+    from_agents = sum(agent.message_count for agent in band.agents)
+
+    assert band.message_count == from_agents == 4  # 2 spawns + 2 child reads
 
 
 def test_containers_sit_in_timeline_order_among_the_parents_blocks():

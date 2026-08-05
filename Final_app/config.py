@@ -7,6 +7,7 @@ for both tools: ``OPENAI_API_KEY``, ``OPENAI_BASE_URL``, and a model variable.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 _ENV_LOAD_INFO: dict = {"dotenv": False, "found": [], "loaded": []}
@@ -108,3 +109,115 @@ def llm_diagnostics() -> dict:
         "env_files_loaded": _ENV_LOAD_INFO["loaded"],
         "reasons": reasons,
     }
+
+
+# --- live probe --------------------------------------------------------
+#
+# ``llm_diagnostics`` only reads configuration. Configuration can be perfectly
+# valid and the LLM still unusable — the LiteLLM proxy here is VPN-only, so the
+# common failure is a correct key against an unreachable host. That looked
+# identical to "working" in the UI: blocks quietly fell back to the shell
+# heuristic and nothing said why.
+#
+# The probe is the judge's own call shape (a chat completion against
+# ``JUDGE_MODEL``), so it exercises the key, the host, *and* the model name.
+# ``max_tokens=1`` keeps it to a token.
+
+# Deliberately shorter than LLM_TIMEOUT_S: this runs while someone waits for a
+# banner, not while a session is being classified.
+PROBE_TIMEOUT_S = float(os.environ.get("TRACELENS_PROBE_TIMEOUT", "8"))
+
+# Re-probing on every page load would add a round trip to every navigation for
+# a state that changes only when a VPN goes up or down.
+PROBE_TTL_S = 60.0
+
+_probe_cache: dict = {}
+
+
+def _describe_probe_failure(error: Exception) -> tuple[str, str]:
+    """``(short reason, what to do about it)`` for a failed probe.
+
+    Mapped by exception name rather than by class, so this module never has to
+    import ``openai`` just to catch its errors.
+    """
+    name = type(error).__name__
+    text = str(error)
+
+    if "Timeout" in name or "timed out" in text.lower():
+        return ("the LLM did not respond in time",
+                "The proxy is usually reachable only over VPN — check you are connected.")
+    if "Connection" in name or "APIConnectionError" in name:
+        return ("the LLM host could not be reached",
+                "Check OPENAI_BASE_URL and, if this is an internal proxy, your VPN.")
+    if "Authentication" in name or "401" in text:
+        return ("the API key was rejected",
+                "OPENAI_API_KEY is set but not accepted by this host.")
+    if "NotFound" in name or "404" in text:
+        return (f"the model {JUDGE_MODEL!r} was not found",
+                "Set TRACELENS_MODEL to a model this host serves.")
+    if "PermissionDenied" in name or "403" in text:
+        return ("this key is not allowed to use that model",
+                f"The host refused {JUDGE_MODEL!r} for this key.")
+    if "RateLimit" in name or "429" in text:
+        return ("the LLM is rate limiting", "Try again shortly.")
+    return (f"the LLM call failed ({name})", text[:200])
+
+
+def probe_llm(force: bool = False) -> dict:
+    """Actually call the LLM. Returns ``{ok, reason, hint, latency_ms, ...}``.
+
+    Never raises: a diagnostic that can break the page it diagnoses is worse
+    than no diagnostic.
+    """
+    now = time.monotonic()
+    cached = _probe_cache.get("result")
+    if not force and cached and now - _probe_cache["at"] < PROBE_TTL_S:
+        return dict(cached, cached=True)
+
+    config = llm_diagnostics()
+    if not config["enabled"]:
+        result = {
+            "ok": False,
+            "configured": False,
+            "reason": "the LLM is not configured",
+            "hint": "; ".join(config["reasons"]),
+            "latency_ms": 0,
+            "model": JUDGE_MODEL,
+        }
+        _probe_cache.update(result=result, at=now)
+        return dict(result, cached=False)
+
+    started = time.monotonic()
+    try:
+        from openai import OpenAI
+
+        client = (OpenAI(base_url=LLM_BASE_URL, timeout=PROBE_TIMEOUT_S)
+                  if LLM_BASE_URL else OpenAI(timeout=PROBE_TIMEOUT_S))
+        client.chat.completions.create(
+            model=JUDGE_MODEL,
+            max_tokens=1,
+            temperature=0,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+    except Exception as error:  # noqa: BLE001 - reported, never raised
+        reason, hint = _describe_probe_failure(error)
+        result = {
+            "ok": False,
+            "configured": True,
+            "reason": reason,
+            "hint": hint,
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "model": JUDGE_MODEL,
+        }
+    else:
+        result = {
+            "ok": True,
+            "configured": True,
+            "reason": "",
+            "hint": "",
+            "latency_ms": round((time.monotonic() - started) * 1000),
+            "model": JUDGE_MODEL,
+        }
+
+    _probe_cache.update(result=result, at=now)
+    return dict(result, cached=False)

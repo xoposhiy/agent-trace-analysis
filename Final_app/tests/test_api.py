@@ -1,32 +1,43 @@
 """API tests: endpoint shapes, filtering, and cache behaviour.
 
-Background summarisation is disabled throughout — these tests assert on
-routing and caching, never on the LLM.
+Nothing here reaches the network. Block classification is the only remaining
+LLM caller and the detail endpoint serves it from cache, so these tests assert
+on routing, attribution and caching only.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from Final_app.adapters import claude_code
+from Final_app.analysis import classify
 from Final_app.api import app as api
 
 from .conftest import PROJECT_SLUG, user_line, write_transcript
 
 
 @pytest.fixture(autouse=True)
-def clean_api(monkeypatch: pytest.MonkeyPatch):
-    """Empty the module-level parse cache and silence the judge.
+def clean_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Empty the module-level parse cache and cut every route to the network.
 
     ``_cache`` persists for the process lifetime, so without this one test's
     sessions show up in the next.
+
+    The detail endpoint builds blocks, and classification calls the judge for
+    ambiguous Bash commands. ``classify.llm_available()`` is true whenever
+    ``OPENAI_API_KEY`` is set, so on a developer machine these tests would
+    reach the LiteLLM proxy and write to the real ``~/.cache/tracelens``,
+    making them pass or fail on whether the VPN is up (CLAUDE.md §6).
     """
+    monkeypatch.setattr(classify, "llm_available", lambda: False)
+    monkeypatch.setattr(classify, "_CACHE_FILE", tmp_path / "tool_kinds.json")
+    monkeypatch.setattr(classify, "_cache", None)
+
     api._cache.clear()
-    monkeypatch.setattr(api.judge, "llm_available", lambda: False)
-    monkeypatch.setattr(api.judge, "cached_summary", lambda prompts: "")
     yield
     api._cache.clear()
 
@@ -55,6 +66,43 @@ def test_health_explains_why_the_llm_is_off(client: TestClient, claude_home: Pat
 
     assert body["llm"]["enabled"] is False
     assert body["llm"]["reasons"], "expected a stated reason"
+
+
+def test_llm_check_reports_a_broken_llm_without_failing_the_request(
+    client: TestClient, claude_home: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A wrong configuration must produce an error *message*, not an HTTP error.
+
+    The banner is the only thing that tells a user their VPN is down; a 500
+    here would leave them with a silent fallback to the shell heuristic.
+    """
+    monkeypatch.setattr(api, "probe_llm", lambda force=False: {
+        "ok": False, "configured": True,
+        "reason": "the LLM host could not be reached",
+        "hint": "Check OPENAI_BASE_URL and your VPN.",
+        "latency_ms": 8000, "model": "some-model", "cached": False,
+    })
+    response = client.get("/api/llm-check")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["reason"] and body["hint"], "a failure must say why and what to do"
+
+
+def test_llm_check_passes_force_through(client: TestClient, claude_home: Path,
+                                        monkeypatch: pytest.MonkeyPatch):
+    """The Retry button has to bypass the one-minute cache to be useful."""
+    seen: list[bool] = []
+    monkeypatch.setattr(api, "probe_llm", lambda force=False: (
+        seen.append(force) or {"ok": True, "configured": True, "reason": "",
+                               "hint": "", "latency_ms": 1, "model": "m",
+                               "cached": False}))
+
+    client.get("/api/llm-check")
+    client.get("/api/llm-check?force=true")
+
+    assert seen == [False, True]
 
 
 def test_projects_lists_slugs_with_counts(client: TestClient, claude_home: Path,
@@ -111,17 +159,216 @@ def test_unknown_project_yields_an_empty_list_not_an_error(
     assert response.json()["total"] == 0
 
 
-def test_severity_filter_accepts_any(client: TestClient, claude_home: Path,
-                                     simple_session: Path):
-    """Every session reports ``none`` until problem detection lands."""
-    assert client.get("/api/sessions?severity=any").json()["total"] == 1
-    assert client.get("/api/sessions?severity=high").json()["total"] == 0
+def test_severity_filter_narrows_the_returned_rows(client: TestClient,
+                                                   claude_home: Path,
+                                                   simple_session: Path):
+    """Every session reports ``none`` until problem detection lands.
+
+    Asserted on the rows, not on ``total``: since paging parses only the page
+    it returns, ``total`` counts candidate transcripts on disk and cannot
+    account for a filter that needs a session parsed to evaluate.
+    """
+    assert len(client.get("/api/sessions?severity=any").json()["sessions"]) == 1
+    assert len(client.get("/api/sessions?severity=high").json()["sessions"]) == 0
 
 
-def test_pending_summaries_is_zero_when_the_llm_is_off(
+def test_the_list_never_advertises_an_llm_summary(
     client: TestClient, claude_home: Path, simple_session: Path
 ):
-    assert client.get("/api/sessions").json()["pending_summaries"] == 0
+    """Summaries were removed; the free ``ai-title`` is the only label."""
+    row = client.get("/api/sessions").json()["sessions"][0]
+
+    assert "summary" not in row
+    assert "pending_summaries" not in client.get("/api/sessions").json()
+    assert row["title"] == "Fix the login bug"
+
+
+# ----------------------------------------------------------------------
+# Paging
+# ----------------------------------------------------------------------
+# The list opens only the transcripts it returns. A user with years of history
+# was waiting many seconds for a page of twenty rows, because ordering came
+# from ``last_ts`` and ``last_ts`` needs a parse. Ordering now comes from file
+# mtime, which ``stat`` gives for free.
+
+def _many_sessions(claude_home: Path, count: int) -> None:
+    """``count`` transcripts, oldest first, one minute apart."""
+    for index in range(count):
+        path = write_transcript(claude_home / PROJECT_SLUG / f"s{index:03d}.jsonl", [
+            user_line("u1", f"session {index}",
+                      f"2026-08-01T10:{index:02d}:00.000Z"),
+        ])
+        # mtime is the sort key, so it has to match the message order.
+        os.utime(path, (1_800_000_000 + index * 60, 1_800_000_000 + index * 60))
+
+
+def test_the_list_returns_one_page_by_default(client: TestClient,
+                                              claude_home: Path):
+    _many_sessions(claude_home, 25)
+    body = client.get("/api/sessions").json()
+
+    assert len(body["sessions"]) == api.PAGE_SIZE == 20
+    assert body["total"] == 25
+    assert body["has_more"] is True
+
+
+def test_the_first_page_is_the_newest_sessions(client: TestClient,
+                                               claude_home: Path):
+    _many_sessions(claude_home, 25)
+    body = client.get("/api/sessions").json()
+
+    assert body["sessions"][0]["session_id"] == "s024"
+    assert body["sessions"][-1]["session_id"] == "s005"
+
+
+def test_load_more_continues_where_the_page_ended(client: TestClient,
+                                                  claude_home: Path):
+    _many_sessions(claude_home, 25)
+    first = client.get("/api/sessions").json()
+    second = client.get("/api/sessions?offset=20").json()
+
+    assert len(second["sessions"]) == 5
+    assert second["has_more"] is False
+
+    ids = [s["session_id"] for s in first["sessions"] + second["sessions"]]
+    assert len(ids) == len(set(ids)) == 25, "paging must not repeat or skip"
+
+
+def test_a_short_last_page_reports_no_more(client: TestClient, claude_home: Path,
+                                           simple_session: Path):
+    body = client.get("/api/sessions").json()
+
+    assert body["total"] == 1
+    assert body["has_more"] is False
+
+
+def test_paging_past_the_end_is_empty_not_an_error(client: TestClient,
+                                                   claude_home: Path,
+                                                   simple_session: Path):
+    response = client.get("/api/sessions?offset=500")
+
+    assert response.status_code == 200
+    assert response.json()["sessions"] == []
+    assert response.json()["has_more"] is False
+
+
+def test_the_page_size_is_capped(client: TestClient, claude_home: Path):
+    """An unbounded ``limit`` would reintroduce the parse-everything cost."""
+    assert client.get("/api/sessions?limit=5000").status_code == 422
+    assert client.get("/api/sessions?offset=-1").status_code == 422
+
+
+def test_the_project_filter_applies_before_paging(client: TestClient,
+                                                  claude_home: Path):
+    _many_sessions(claude_home, 25)
+    other = "-Users-tester-Desktop-other-repo"
+    write_transcript(claude_home / other / "x.jsonl", [
+        user_line("u1", "elsewhere", "2026-08-01T10:00:00.000Z"),
+    ])
+    body = client.get(f"/api/sessions?project={other}").json()
+
+    assert body["total"] == 1, "total must count only the filtered project"
+    assert body["has_more"] is False
+    assert [s["session_id"] for s in body["sessions"]] == ["x"]
+
+
+def test_listing_a_page_parses_only_that_page(client: TestClient,
+                                              claude_home: Path,
+                                              monkeypatch: pytest.MonkeyPatch):
+    """The whole point of the change — assert it, do not assume it."""
+    _many_sessions(claude_home, 25)
+
+    parsed: list[str] = []
+    real = claude_code.load_session
+
+    def counting(project_slug, path, *args, **kwargs):
+        parsed.append(path.stem)
+        return real(project_slug, path, *args, **kwargs)
+
+    monkeypatch.setattr(api.claude_code, "load_session", counting)
+    client.get("/api/sessions")
+
+    assert len(parsed) == 20, f"parsed {len(parsed)} transcripts for a 20-row page"
+
+
+def test_the_detail_route_parses_only_its_own_session(
+    client: TestClient, claude_home: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _many_sessions(claude_home, 25)
+
+    parsed: list[str] = []
+    real = claude_code.load_session
+
+    def counting(project_slug, path, *args, **kwargs):
+        parsed.append(path.stem)
+        return real(project_slug, path, *args, **kwargs)
+
+    monkeypatch.setattr(api.claude_code, "load_session", counting)
+    client.get("/api/sessions/s007")
+
+    assert parsed == ["s007"]
+
+
+def test_pages_version_their_asset_urls(client: TestClient, claude_home: Path):
+    """A cached ``app.js`` outlived the code it called and broke the page.
+
+    ``Cache-Control: no-cache`` alone did not shift it — there is no build step,
+    so the URL never changes and the browser was free to keep its copy. The
+    version in the query string is what makes reuse impossible.
+    """
+    html = client.get("/").text
+
+    assert 'src="/static/app.js?v=' in html
+    assert 'href="/static/style.css?v=' in html
+    assert 'src="/static/app.js"' not in html, "an unversioned URL slipped through"
+
+
+def test_the_asset_version_changes_when_a_file_changes(
+    client: TestClient, claude_home: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path
+):
+    before = api._asset_version()
+
+    web = tmp_path / "web"
+    web.mkdir()
+    for name in ("index.html", "app.js"):
+        (web / name).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(api, "WEB_DIR", web)
+
+    assert api._asset_version() != before
+
+
+def test_pages_are_never_cached(client: TestClient, claude_home: Path):
+    """The HTML carries the version string, so a stale page undoes the fix."""
+    for route in ("/", "/session/anything"):
+        assert client.get(route).headers["cache-control"] == "no-store", route
+
+
+def test_static_files_are_always_revalidated(client: TestClient,
+                                             claude_home: Path):
+    """A cached ``app.js`` outlived the code it called and broke the page.
+
+    There is no build step and no content hash in these filenames, so an edited
+    file keeps its URL; without ``no-cache`` a browser may reuse the old one
+    indefinitely.
+    """
+    for asset in ("/static/app.js", "/static/bar.js", "/static/style.css"):
+        response = client.get(asset)
+        assert response.status_code == 200, asset
+        assert response.headers["cache-control"] == "no-cache", asset
+
+
+def test_projects_counts_without_parsing(client: TestClient, claude_home: Path,
+                                         monkeypatch: pytest.MonkeyPatch):
+    _many_sessions(claude_home, 25)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("/api/projects must not parse transcripts")
+
+    monkeypatch.setattr(api.claude_code, "load_session", forbidden)
+    projects = client.get("/api/projects").json()["projects"]
+
+    assert projects[0]["count"] == 25
 
 
 # ----------------------------------------------------------------------
@@ -149,10 +396,36 @@ def test_detail_serialises_every_field_the_bar_reads(
 
     assert body["blocks"], "expected the detail endpoint to build blocks"
     for field in ("kind", "label", "confidence", "message_count",
-                  "duration_s", "tokens", "inner_blocks",
+                  "duration_s", "tokens", "attributed_tokens", "inner_blocks",
                   "agent_id", "description"):
         assert field in body["blocks"][0], f"blocks[].{field} missing"
     assert "working" in body["blocks"][0]["tokens"]
+
+
+def test_the_api_divides_the_context_window_across_the_blocks(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """The bar sizes by ``attributed_tokens``; it must add up to the header.
+
+    Wired in ``_load_sessions``, so this also pins that a cached session comes
+    back attributed rather than only a freshly parsed one.
+    """
+    body = client.get(f"/api/sessions/{simple_session.stem}").json()
+    in_blocks = sum(b["attributed_tokens"] for b in body["blocks"])
+
+    assert in_blocks == body["tokens"]["working"]
+
+
+def test_attribution_survives_the_session_cache(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """A second request is served from ``_cache`` — it must not come back at 0."""
+    first = client.get(f"/api/sessions/{simple_session.stem}").json()
+    second = client.get(f"/api/sessions/{simple_session.stem}").json()
+
+    assert [b["attributed_tokens"] for b in first["blocks"]] \
+        == [b["attributed_tokens"] for b in second["blocks"]]
+    assert sum(b["attributed_tokens"] for b in second["blocks"]) > 0
 
 
 def test_every_block_kind_has_a_label(client: TestClient, claude_home: Path,
@@ -253,6 +526,276 @@ def test_a_deleted_session_is_evicted_from_the_cache(
 # Pages
 # ----------------------------------------------------------------------
 
-@pytest.mark.parametrize("path", ["/", "/session/anything", "/static/app.js"])
+@pytest.mark.parametrize("path", ["/", "/session/anything", "/static/app.js",
+                                  "/session/anything/block/0",
+                                  "/session/anything/agent/abc",
+                                  "/session/anything/agent/abc/block/0"])
 def test_pages_are_served(client: TestClient, claude_home: Path, path: str):
     assert client.get(path).status_code == 200
+
+
+# ----------------------------------------------------------------------
+# One block's steps
+# ----------------------------------------------------------------------
+# The page behind a click on the bar. It has to answer "what was read, run or
+# written here" — the detail `Block.as_dict()` deliberately leaves out.
+
+def _blocks_of(client: TestClient, session_id: str) -> list[dict]:
+    return client.get(f"/api/sessions/{session_id}").json()["blocks"]
+
+
+def test_a_block_reports_the_steps_behind_it(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    session_id = simple_session.stem
+    blocks = _blocks_of(client, session_id)
+    execute = next(index for index, block in enumerate(blocks)
+                   if block["kind"] == "execute")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{execute}").json()
+
+    assert body["index"] == execute
+    assert body["block_count"] == len(blocks)
+    # The fixture's execute block is one Bash call: `pytest -k login`.
+    commands = [argument["value"]
+                for step in body["steps"] if step["tool"]
+                for argument in step["tool"]["arguments"]
+                if argument["name"] == "command"]
+    assert commands == ["pytest -k login"]
+
+
+def test_a_read_block_names_the_file_it_read(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    session_id = simple_session.stem
+    blocks = _blocks_of(client, session_id)
+    read = next(index for index, block in enumerate(blocks)
+                if block["kind"] == "read")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{read}").json()
+
+    assert body["summary"]["files"] == ["/repo/login.py"]
+    assert body["summary"]["tool_calls"] == 1
+
+
+def test_a_block_out_of_range_is_a_404_saying_how_many_there_are(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """A link kept from yesterday must not silently show a different block."""
+    session_id = simple_session.stem
+    count = len(_blocks_of(client, session_id))
+
+    response = client.get(f"/api/sessions/{session_id}/blocks/{count}")
+
+    assert response.status_code == 404
+    assert str(count) in response.json()["detail"]
+
+
+def test_a_negative_block_index_is_a_404_not_the_last_block(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """Python would happily read -1 as "from the end"; the URL must not."""
+    response = client.get(f"/api/sessions/{simple_session.stem}/blocks/-1")
+
+    assert response.status_code == 404
+
+
+def test_a_block_of_an_unknown_session_is_a_404(
+    client: TestClient, claude_home: Path
+):
+    assert client.get("/api/sessions/nope/blocks/0").status_code == 404
+
+
+def test_a_subagent_band_lists_the_agents_it_covers(
+    client: TestClient, claude_home: Path, session_with_parallel_subagents: Path
+):
+    session_id = session_with_parallel_subagents.stem
+    blocks = _blocks_of(client, session_id)
+    band = next(index for index, block in enumerate(blocks)
+                if block["kind"] == "subagent")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{band}").json()
+
+    assert [agent["description"] for agent in body["agents"]] == [
+        "Map the adapters", "Map the web layer"]
+    # Each agent summarises its own work, not the band's pooled list. The spawn
+    # that launched it leads its events, so `Agent` appears alongside the
+    # child's own tools — that is what anchors the agent at its delegation.
+    assert [agent["summary"]["tools"] for agent in body["agents"]] == [
+        {"Agent": 1, "Grep": 1}, {"Agent": 1, "Read": 1}]
+
+
+def test_a_band_lists_only_the_calls_that_delegated(
+    client: TestClient, claude_home: Path, session_with_parallel_subagents: Path
+):
+    """Not the children's own steps — those belong to each agent's own page.
+
+    The band's events include every child event, because that is what makes
+    its size on the bar honest. Listing them here repeated the whole subtree
+    one level up.
+    """
+    session_id = session_with_parallel_subagents.stem
+    blocks = _blocks_of(client, session_id)
+    band = next(index for index, block in enumerate(blocks)
+                if block["kind"] == "subagent")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{band}").json()
+
+    assert [step["tool"]["name"] for step in body["steps"]] == ["Agent", "Agent"]
+    # The summary above the list still covers the whole band, children included.
+    assert body["summary"]["tools"] == {"Agent": 2, "Grep": 1, "Read": 1}
+
+
+def test_an_ordinary_block_still_lists_every_step(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """The spawn-only filter must apply to delegation bands and nothing else."""
+    session_id = simple_session.stem
+    blocks = _blocks_of(client, session_id)
+    read = next(index for index, block in enumerate(blocks)
+                if block["kind"] == "read")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{read}").json()
+
+    assert len(body["steps"]) == body["summary"]["steps"]
+
+
+def test_a_band_lists_its_agents_without_shipping_their_steps(
+    client: TestClient, claude_home: Path, session_with_parallel_subagents: Path
+):
+    """Each agent links to its own page; inlining every subtree here would
+    make one request carry the whole session's delegated work."""
+    session_id = session_with_parallel_subagents.stem
+    blocks = _blocks_of(client, session_id)
+    band = next(index for index, block in enumerate(blocks)
+                if block["kind"] == "subagent")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{band}").json()
+
+    assert all("steps" not in agent for agent in body["agents"])
+    assert [agent["block_count"] for agent in body["agents"]] == [1, 1]
+
+
+# ----------------------------------------------------------------------
+# One subagent's own bar
+# ----------------------------------------------------------------------
+# A subagent is a session in miniature: its own blocks, its own bar, its own
+# click-through. These endpoints are what make that page possible.
+
+def _first_agent_id(client: TestClient, session_id: str) -> str:
+    blocks = _blocks_of(client, session_id)
+    band = next(block for block in blocks if block["kind"] == "subagent")
+    return band["agents"][0]["agent_id"]
+
+
+def test_a_subagent_serves_its_own_blocks_for_a_bar_of_its_own(
+    client: TestClient, claude_home: Path, session_with_subagent: Path
+):
+    session_id = session_with_subagent.stem
+    agent_id = _first_agent_id(client, session_id)
+
+    body = client.get(f"/api/sessions/{session_id}/agents/{agent_id}").json()
+
+    assert body["agent_id"] == agent_id
+    assert body["description"] == "Find all TODOs"
+    # The task prompt the parent handed the child leads the agent's bar as
+    # `coordination`, never `user_chat` — no human is in a subagent's loop.
+    # Then Grep and Read merge into one `read`.
+    assert [block["kind"] for block in body["blocks"]] == ["coordination", "read"]
+    assert body["blocks"][1]["message_count"] == 2
+
+
+def test_each_parallel_subagent_serves_only_its_own_work(
+    client: TestClient, claude_home: Path, session_with_parallel_subagents: Path
+):
+    """Two agents under one band must not see each other's blocks."""
+    session_id = session_with_parallel_subagents.stem
+    blocks = _blocks_of(client, session_id)
+    band = next(block for block in blocks if block["kind"] == "subagent")
+    tools_by_agent = {}
+
+    for agent in band["agents"]:
+        body = client.get(
+            f"/api/sessions/{session_id}/agents/{agent['agent_id']}").json()
+        tools_by_agent[body["description"]] = body["summary"]["tools"]
+
+    assert tools_by_agent == {
+        "Map the adapters": {"Agent": 1, "Grep": 1},
+        "Map the web layer": {"Agent": 1, "Read": 1},
+    }
+
+
+def test_an_unknown_subagent_is_a_404(
+    client: TestClient, claude_home: Path, session_with_subagent: Path
+):
+    response = client.get(
+        f"/api/sessions/{session_with_subagent.stem}/agents/nope")
+
+    assert response.status_code == 404
+    assert "nope" in response.json()["detail"]
+
+
+def test_a_block_of_a_subagents_bar_reports_that_agent(
+    client: TestClient, claude_home: Path, session_with_subagent: Path
+):
+    session_id = session_with_subagent.stem
+    agent_id = _first_agent_id(client, session_id)
+
+    # Block 1 is the agent's work; block 0 is the task prompt it was handed.
+    body = client.get(
+        f"/api/sessions/{session_id}/agents/{agent_id}/blocks/1").json()
+
+    assert body["agent_id"] == agent_id
+    assert body["agent_description"] == "Find all TODOs"
+    # Counted within the agent's bar, not the session's.
+    assert body["block_count"] == 2
+    assert body["summary"]["tools"] == {"Grep": 1, "Read": 1}
+
+
+def test_a_subagent_block_out_of_range_is_a_404(
+    client: TestClient, claude_home: Path, session_with_subagent: Path
+):
+    session_id = session_with_subagent.stem
+    agent_id = _first_agent_id(client, session_id)
+
+    response = client.get(
+        f"/api/sessions/{session_id}/agents/{agent_id}/blocks/9")
+
+    assert response.status_code == 404
+    assert agent_id in response.json()["detail"]
+
+
+def test_a_session_block_reports_no_agent_of_its_own(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """So the page can tell "block of a session" from "block of a subagent"."""
+    body = client.get(f"/api/sessions/{simple_session.stem}/blocks/0").json()
+
+    assert body["agent_id"] is None
+
+
+def test_a_non_subagent_block_lists_no_agents(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    body = client.get(f"/api/sessions/{simple_session.stem}/blocks/0").json()
+
+    assert body["agents"] == []
+
+
+def test_a_blocks_steps_carry_the_api_call_they_were_billed_to(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """The cost unit is the message, not the step — the page has to show it.
+
+    Only assistant-side steps carry one: a user prompt is a line the human
+    typed, not an API response, so it has no ``message.id`` to report.
+    """
+    session_id = simple_session.stem
+    blocks = _blocks_of(client, session_id)
+    read = next(index for index, block in enumerate(blocks)
+                if block["kind"] == "read")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{read}").json()
+
+    assert all(step["message_id"] for step in body["steps"] if step["tool"])
+    assert body["summary"]["api_calls"] >= 1
