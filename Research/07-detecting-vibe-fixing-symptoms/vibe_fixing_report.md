@@ -1,92 +1,132 @@
 # Vibe-Fixing Symptoms in the SWE-Chat Dataset
 
-This report shows how often "vibe-fixing" happens in coding-agent sessions. Vibe-fixing means a user accepts a fix from the agent without a clear task, without checking it, or without proof that it works. I checked **25 real coding sessions** from the SWE-Chat dataset (agent: Claude Code). All sessions were included, not only long ones.
+This report shows how often "vibe-fixing" happens in coding-agent sessions — the agent's work moving forward without enough specification or enough verification. I checked a **sample of 15 sessions** drawn from the 4,852 parseable Claude Code sessions in the SWE-Chat dataset. The sample is the first N sessions in dataset order, **not a random sample**, so it is a spot check rather than a dataset-wide estimate. Short sessions were included alongside long ones.
 
 ## What I Looked For
 
-I checked each session for 7 checks (5 judged by an LLM, 2 by simple thresholds):
+Two main categories, each broken into subcategories, plus one standalone symptom and two metadata-only checks:
 
-| Symptom | What it means |
+| Category / Symptom | What it means |
 |---|---|
-| `no_spec` | The user's request is very short and unclear, or the agent shows doubt but still submits an answer |
-| `no_closed_loop` | The user asks for a fix, but there is no way to check if it worked (no test run) |
-| `no_acceptance_criteria` | The user's goal is vague ("make it faster", "clean this up"), with no clear target |
-| `no_visual_reference` | The user asks for a UI/visual change, but gives no image or design file |
-| `repetitive_fix_attempts` | The agent fixes the same bug wrong more than once, and the user has to report it again |
+| **`not_enough_verification`** | The implementation wasn't actually checked before being treated as finished. |
+| &nbsp;&nbsp;`not-tested` | Agent claims the task is finished but never verified it (no test, no manual check). |
+| &nbsp;&nbsp;`self-report` | Agent itself says some important part wasn't tested. |
+| &nbsp;&nbsp;`ask-for-manual-testing` | Agent asks the human to test something manually. |
+| &nbsp;&nbsp;`repetitive-bug-fixes` | After the agent called it done, the user tested manually and reported bugs. |
+| **`not_enough_specification`** | The user's request wasn't clear enough to act on. |
+| &nbsp;&nbsp;`no-spec-detected` | User asked for an implementation without a detailed enough spec. |
+| &nbsp;&nbsp;`repetitive-requirements-fixes` | Agent fixed it the wrong way and the user pushed back, repeatedly. |
+| &nbsp;&nbsp;`self-report` | Agent itself says it doesn't have enough specification. |
+| `no_visual_reference` | The user asks for a UI/visual change, but gives no image or design file. |
 | `scope_files_too_many` | Too many files were changed in one session |
 | `scope_turns_too_long` | The session had an unusually high number of turns |
 
 ## How I Detected Them
 
-I used two methods:
+**LLM-as-judge, one call per category** (3 calls per session total: `not_enough_verification`, `not_enough_specification`, `no_visual_reference`). Each session's raw transcript is rendered as a single chronological, typed-block timeline — every user message, every piece of agent thinking, and every tool call together with its raw result, in the exact order they happened, each tagged with the message number it occurred at (rendering approach inspired by [VCC](https://github.com/lllyasviel/VCC)). That same timeline is reused across a session's 3 calls.
 
-**1. LLM-as-judge (Claude Haiku 4.5), one isolated call per symptom.** Each session's raw transcript is rendered as a single chronological, typed-block timeline — every user message, every piece of agent thinking, and every tool call together with its raw result, in the exact order they happened, each tagged with the turn number it occurred at (this rendering approach is inspired by [VCC](https://github.com/lllyasviel/VCC), a compiler for agent conversation logs). That same timeline is reused as a shared prefix across a session's 5 symptom calls. Each call also cites which turn(s) its evidence came from, so findings can be traced back to a specific point in the session rather than just a session-wide yes/no.
+Each call returns **every occurrence** it finds, not just the first — a session can show the same subcategory multiple times (e.g. the agent asks for manual testing twice, or gets pushed back on requirements three times), and each one is recorded with its own message location and evidence.
 
-Notably, we do NOT pre-label which tool calls are "tests" or which files are "specs" using keyword lists or filename patterns — every tool call and its raw output are shown to the judge as-is, and it decides for itself (e.g. whether a bash command was a meaningful verification step, or whether a file the agent read plausibly explains an otherwise-vague request).
+We do NOT pre-label which tool calls are "tests" or which files are "specs" using keyword lists or filename patterns — every tool call and its raw output are shown to the judge as-is, and it decides for itself.
 
-**2. Metadata-only rules.** The two `scope_*` symptoms don't need an LLM. I just count files touched and turns per session, and flag sessions above a threshold.
+**Metadata-only rules.** `scope_files_too_many` and `scope_turns_too_long` don't need an LLM — just a count of files touched and assistant turns per session, flagged above a threshold.
+
+**What the judge does and doesn't see.** The timeline is condensed, not verbatim, and the caps matter when reading the numbers below — two of these checks are judgments about something being *absent*, which truncation can manufacture:
+
+- Agent thinking has no session-wide cap, but an individual thinking block longer than 4,000 characters is shown as its first and last portions only, explicitly marked as truncated.
+- Each tool result is cut to 600 characters. The tool *call* is always visible, but a long test run's actual output may be clipped.
+- Each user message is cut to 2,000 characters, so a spec buried at the end of a very long request can be lost — which pushes `no-spec-detected` toward false positives.
 
 ## Results
 
-| Symptom | Count | % of judged sessions |
-|---|---|---|
-| `no_closed_loop` | 4 | 16% |
-| `no_spec` | 3 | 12% |
-| `no_acceptance_criteria` | 5 | 20% |
-| `scope_turns_too_long` | 8 | 32% |
-| `scope_files_too_many` | 3 | 12% |
-| `repetitive_fix_attempts` | 7 | 28% |
-| `no_visual_reference` | 1 | 4% |
+"Sessions" counts sessions with at least one occurrence; "Total occurrences" counts every occurrence, so a session flagged three times contributes 1 and 3 respectively. Percentages are per-check: each LLM check is divided by the number of sessions where **that** call succeeded, and the metadata-only checks by all judged sessions — so if any calls failed, the denominators differ slightly between rows. See Run Reliability below.
+
+| Check | Sessions | % of judged sessions | Total occurrences |
+|---|---|---|---|
+| **`not_enough_verification`** (any) | 4 | 27% | — |
+| &nbsp;&nbsp;`not-tested` | 2 | 13% | 2 |
+| &nbsp;&nbsp;`self-report` | 1 | 7% | 1 |
+| &nbsp;&nbsp;`ask-for-manual-testing` | 1 | 7% | 2 |
+| &nbsp;&nbsp;`repetitive-bug-fixes` | 3 | 20% | 8 |
+| **`not_enough_specification`** (any) | 7 | 47% | — |
+| &nbsp;&nbsp;`no-spec-detected` | 2 | 13% | 2 |
+| &nbsp;&nbsp;`repetitive-requirements-fixes` | 4 | 27% | 6 |
+| &nbsp;&nbsp;`self-report` | 4 | 27% | 6 |
+| `no_visual_reference` | 0 | 0% | 0 |
+| `scope_files_too_many` | 1 | 7% | — |
+| `scope_turns_too_long` | 5 | 33% | — |
 
 ## Examples
 
-For each symptom flagged by the LLM judge, here are real examples pulled from this run (session id, the turn(s) the evidence came from, and the judge's one-line reason). These are spot-check material, not proof — always worth reading the underlying transcript before trusting an aggregate number.
+For each subcategory/symptom flagged by the judge, real examples pulled from this run (session id, which message(s) the evidence came from, and the judge's one-line reason). Spot-check material, not proof.
 
-**`no_spec`**
+**`not_enough_verification` → `not-tested`**
 
-- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (turns 498-511) The feature request to indicate that a session was not active during intervening commits did not define the desired visual treatment, yet the agent directly changed lane rendering to show only rows where the session had a checkpoint.
-- [`2026-01-16-cde341db-b80a-44f5-b0f2-94db2ef7a164`] (turn 0) The initial change request asks for “a flame graph or tracing or something” without defining the diagnostic interface, scope, or acceptance criteria, and the agent proceeded by choosing an implementation itself.
-- [`2026-01-19-38917d7d-9f69-4210-a3b0-eed0a9e97575`] (turns 49-60) The request "print the time that request takes to resolve" (turn 49) is underspecified, and the agent proceeded by arbitrarily timing both Enqueue and Close without clarifying the intended request or output.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 290-319) The loading-spinner implementation was treated as complete after lint and the general test suite, without manually running the interactive command or adding a spinner-specific test.
+- [`2026-01-19-38917d7d-9f69-4210-a3b0-eed0a9e97575`] (messages 77-97) After adding timing instrumentation around telemetry enqueue/close operations, the agent ran only formatting and linting, then treated the change as complete without running tests or manually exercising the CLI.
 
-**`no_closed_loop`**
+**`not_enough_verification` → `self-report`**
 
-- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (turns 506-515) After changing lane rendering, the agent only ran formatting, lint, the existing test suite, and a build; it did not rerun `entire list` in the reproduction repository or inspect the rendered output to verify inactive-session gaps.
-- [`2026-01-20-86cc3044-7515-43f1-9c25-1444738c64c9`] (turns 138-141) After the user reproduced the Cobra help output in turn 138, the agent only launched an exploratory search in turn 141 and did not make or verify a corresponding fix; the earlier full test run did not cover this behavior.
-- [`2026-01-22-0cf3db51-1c73-43bb-8d05-dc02739514a5`] (turns 866-987) After making the later TranscriptPath and agent-agnostic changes, the agent only ran `go build ./cmd/entire/cli/agent/claudecode/...` (turn 987), with no targeted or full test run; the subsequent edit was rejected at turn 995.
-- [`2026-01-22-48f428f9-72d8-40b2-9594-953019809473`] (turns 72-83) After editing the GoReleaser and workflow files, the agent only reread them and checked IDE diagnostics; it never ran GoReleaser, a YAML/workflow validation, or any release/install verification.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 501-570) The agent explicitly said it could not run the interactive TUI in the available environment and relied on code inspection rather than observing the lane rendering directly.
 
-**`no_acceptance_criteria`**
+**`not_enough_verification` → `ask-for-manual-testing`**
 
-- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (turns 498-513) The request to indicate somehow that a session was inactive during intervening commits provided no concrete visual treatment or acceptance condition; the agent chose gap-based lane rendering and verified only lint/tests.
-- [`2026-01-16-cde341db-b80a-44f5-b0f2-94db2ef7a164`] (turn 0) The request asks for a lightweight tracing or flame-graph solution to investigate a few-hundred-millisecond delay but does not define a concrete completion or performance target.
-- [`2026-01-16-eb4bcc15-3ff5-4d73-bac5-9bc1d786b2bb`] (turns 81-94) The implementation request was to calculate token consumption at Stop-hook time, but it did not specify the exact token metric, aggregation rules, metadata schema, or required validation.
-- [`2026-01-19-c2b51eb0-d0e9-43cf-b431-42c05d49450b`] (turns 0, 24-32, 50-57, 91) ENT-53 begins as the vague goal to “Clean up explain output,” and although the session develops a proposed tiered design, it never establishes concrete acceptance tests or a measurable definition of done before implementation begins.
-- [`2026-01-21-130d7b7e-5801-4345-9bd6-f32fd9b8429b`] (turn 0) The initial request to “add the agent name to any logging” does not define which logs, propagation behavior, or verification target would constitute completion.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 739-745) The agent explicitly handed verification of the final gap-rendering behavior to the user by saying they could test it in the repository.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 566-570) The agent explicitly said the user could test the rebuilt lane visualization rather than verifying the interactive TUI itself.
+
+**`not_enough_verification` → `repetitive-bug-fixes`**
+
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 187-189, 197-288) After declaring the session-lane feature complete, the user reported that checkpoints were missing from the main branch; the agent then changed the checkpoint scan limit.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 418-445, 448-485) After declaring branch filtering fixed and verifying one command output, the user reported that the branch still showed 38 commits; the agent found and fixed a second code path.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 487-570) After declaring the lane direction correct and building the binary, the user reported another rendering problem involving session-line placement; the agent changed and then reconsidered the direction logic.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 570-647) After the filtering changes were treated as working, the user reported that a separate test repository showed no checkpoints; the agent found that main was incorrectly filtered and fixed it.
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 649-718) After the active-session fix was declared complete, the user reported that the most recent checkpoint still belonged to a different session; the agent investigated and changed current_session updates in PostCommit.
+
+**`not_enough_specification` → `no-spec-detected`**
+
+- [`2026-01-19-85cc202e-0e74-46ce-a485-e5fcd11f7a8c`] (messages 1-5) The user referred only to “the other bit” without specifying the requested implementation, while the agent inferred that it meant adding interactive yes/no prompt testing.
+- [`2026-01-19-38917d7d-9f69-4210-a3b0-eed0a9e97575`] (messages 77-91) The user asked to "print the time that request takes to resolve" without specifying whether to measure enqueueing, the asynchronous HTTP request, shutdown flushing, or the output format; the agent proceeded by assuming timing should be added to both Enqueue and Close.
+
+**`not_enough_specification` → `repetitive-requirements-fixes`**
+
+- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (messages 321-332) The agent initially implemented lane rendering around a single primary session per checkpoint, but the user clarified that the intended behavior was to render two dots when one checkpoint contains two single-checkpoint sessions; the agent then redesigned the lane data model to support multiple sessions.
+- [`2026-01-19-8b418ea5-895d-4ad5-abe8-4489d36e454f`] (messages 69-77) After the agent proposed and attempted to add the documentation as a comment, the user clarified that it should instead be a document attached directly to the issue, then reiterated this by pointing to the UI's Issue Resources.
+- [`2026-01-19-85cc202e-0e74-46ce-a485-e5fcd11f7a8c`] (messages 7-11) The agent initially pursued changing or injecting `PromptOverwriteNewerLogs`, but the user redirected it to substituting the TTY underneath huh instead.
+- [`2026-01-19-85cc202e-0e74-46ce-a485-e5fcd11f7a8c`] (messages 37-42) The agent proposed a helper taking a simple input string, and the user corrected the requirement to provide a read/write function while keeping timeout management centralized.
+- [`2026-01-19-85cc202e-0e74-46ce-a485-e5fcd11f7a8c`] (messages 44-58) The agent implemented response timing with sleeps, and the user corrected the approach to read from the pty until the prompt appeared instead.
+
+**`not_enough_specification` → `self-report`**
+
+- [`2026-01-19-85cc202e-0e74-46ce-a485-e5fcd11f7a8c`] (message 5) The agent explicitly decided to wait for the user to confirm what they wanted to do next rather than having a confirmed specification for the second change.
+- [`2026-01-19-c2b51eb0-d0e9-43cf-b431-42c05d49450b`] (message 54) The agent explicitly recognized that the relationships between sessions, checkpoints, commits, and branches were architecturally unclear and said it needed to clarify which mental model should drive the design.
+- [`2026-01-19-c2b51eb0-d0e9-43cf-b431-42c05d49450b`] (message 260) After review, the agent explicitly stated that the Task 3 requirements were ambiguous because the plan required applying a limit while also deferring checkpoint listing to a later task.
+- [`2026-01-20-20b81bf8-77cd-4205-8ac9-727b573a70e4`] (message 126) The agent acknowledged it had no concrete evidence that `edit` was a real Gemini CLI tool, after having added it based on ambiguous documentation.
+- [`2026-01-20-20b81bf8-77cd-4205-8ac9-727b573a70e4`] (message 144) The agent again acknowledged it lacked concrete evidence that the removed `edit_file` and `save_file` names were not real tools.
 
 **`no_visual_reference`**
 
-- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (turns 61-67) The session contains multiple visual/UI requests for the CLI list view, including lane lines and spacing, but no screenshot, image, design file, or external visual reference was provided.
+- (no examples captured in this run)
 
-**`repetitive_fix_attempts`**
+## Run Reliability
 
-- [`2026-01-15-43b2bd6e-ccc5-4d83-bbe5-9cd1cd19cc82`] (turns 261-307 and 397-447) After the branch-filtering fix, the user reported at turn 307 that the branch still showed 38 commits; a further fix was then needed, and the same filtering regression later caused no checkpoints in test1234 (turn 397).
-- [`2026-01-19-85cc202e-0e74-46ce-a485-e5fcd11f7a8c`] (turns 47-78) After multiple attempted interactive-test fixes, the tests continued to time out or fail to respond, prompting the user to question the prompt handling and whether huh was using the pty.
-- [`2026-01-20-86cc3044-7515-43f1-9c25-1444738c64c9`] (turns 78-119 and 138) After the agent claimed `NewSilentError` would prevent duplicate output, the user reported that `entire resume` still displayed Cobra usage after the metadata-fetch error.
-- [`2026-01-21-0cd9edf7-459c-4900-af40-cf2c64dea525`] (turns 116-138) After PR#68 was checked out and its tests passed, the user reported that transcript markers were still missing for the first manual commit, repeating part of the original bug.
-- [`2026-01-22-0cf3db51-1c73-43bb-8d05-dc02739514a5`] (turns 749-759, 841-847) After the agent claimed the checkpoint-reuse fix was complete, the user continued reporting that it skipped valid new work and then uncovered an unresolved second scenario involving multiple agent commits before Stop.
+**15** sessions were judged by `openai/gpt-5.6-luna`. **0** were skipped as having no user messages at all, and **0** could not be downloaded or parsed.
+
+| Call | Succeeded | Failed | % of judged sessions covered |
+|---|---|---|---|
+| `not_enough_verification` | 15 | 0 | 100% |
+| `not_enough_specification` | 15 | 0 | 100% |
+| `no_visual_reference` | 15 | 0 | 100% |
 
 ## Performance Notes
 
-Total wall-clock time for this run: 813s. Average download time per session: 0.28s. Average parse time per session: 0.00s.
+Total wall-clock time for this run: 212s. Average download time per session: 0.35s. Average parse time per session: 0.00s.
 
-| Symptom | Avg call time | Avg prompt size |
+| Call | Avg call time | Avg prompt size |
 |---|---|---|
-| `no_spec` | 7.25s | 55,282 chars |
-| `no_closed_loop` | 6.81s | 54,658 chars |
-| `no_acceptance_criteria` | 6.43s | 54,269 chars |
-| `no_visual_reference` | 5.53s | 54,312 chars |
-| `repetitive_fix_attempts` | 6.24s | 54,482 chars |
+| `not_enough_verification` | 4.84s | 57,520 chars |
+| `not_enough_specification` | 6.60s | 57,771 chars |
+| `no_visual_reference` | 2.32s | 55,560 chars |
 
 ## A Note of Caution
 
-`no_verification_by_user` has been removed from this report entirely — it was mostly detecting "no proof shown in the transcript" rather than "the user actually skipped verifying," and a person could always test something outside the chat window, so it wasn't trustworthy as reported. The remaining symptoms rely on clearer, easier-to-check evidence (the actual request text, the raw tool calls and their results, file counts), but spot-checking the Examples section above against real transcripts is still recommended before citing these numbers externally.
+These categories replace the earlier separate symptom list (`no_spec`, `no_closed_loop`, `no_acceptance_criteria`, `repetitive_fix_attempts`), regrouping them by root cause — a verification gap vs. a specification gap — and splitting "repetitive fixes" into two distinct subcategories depending on whether the repeated correction was about a technical bug or a requirements misunderstanding. Spot-checking the Examples section above against real transcripts is recommended before citing these numbers externally.

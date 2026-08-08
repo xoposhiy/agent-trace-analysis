@@ -7,28 +7,31 @@ Runnable standalone to inspect one session's rendered transcript directly:
     python case_file.py <session_id>
     python case_file.py --first        # just grabs the first parseable session
 
-This prints the exact text that would go into a judge prompt's system
-message, plus its character count and how long it took to download/parse —
-useful for "how big are these traces actually" / "where's the time going"
-questions without needing to run the full experiment or call the LLM.
-
 DESIGN NOTES (this revision):
-    - No regex, no keyword heuristics anywhere in this file. We do not try
-      to decide "is this a test command," "did it pass," or "is this a spec
-      file" ourselves — every tool call and its raw result are captured
-      verbatim and handed to the judge (in classify.py) to interpret itself.
+    - No regex, no keyword heuristics anywhere in this file.
     - Rendering is inspired by VCC (https://github.com/lllyasviel/VCC) — a
-      single chronological, typed-block transcript (one global turn-number
-      scheme, blocks for [user] / [assistant thinking] / [tool_call], never
-      reordered) rather than several disconnected sections. We use turn
-      numbers (already assigned per-assistant-turn) instead of raw line
-      numbers, since that's the addressing unit the downstream application
-      actually needs (to know "which turn(s) does this symptom occur at"),
-      not a byte/line offset into the original file.
+      single chronological, typed-block transcript, one global numbering
+      scheme, never reordered. We use MESSAGE numbers (incrementing once per
+      message — every user message AND every assistant message, not just
+      assistant turns) as the addressing unit, since that's what the judge
+      now cites back in its "location" field. `total_turns` (assistant
+      messages only) is tracked separately and unchanged — it only feeds
+      the scope_turns_too_long metadata check, which keeps its original
+      definition untouched.
     - EVERY tool_use call becomes exactly one timeline entry, and its
-      matching tool_result (found later in the event stream) gets patched
-      into that same entry once it arrives — nothing is silently dropped,
-      and nothing is duplicated.
+      matching tool_result gets patched into that same entry in place once
+      found later in the event stream — nothing dropped, nothing duplicated.
+    - Thinking capture has no total session-wide cap anymore (we were
+      capping total thinking chars per session; that's removed — larger
+      context models don't need it). Each individual thinking block is
+      still capped at 4000 chars, but instead of just keeping the first
+      4000 chars, we now keep the first 2000 AND the last 2000 chars (with
+      a note the block was truncated) — the end of a thinking block often
+      contains the actual conclusion, which a pure head-cut was losing.
+    - A user message with an attachment but NO text (a bare pasted
+      screenshot) is kept, not dropped. It counts as a user message and is
+      rendered with its "(image attached)" tag, since that attachment is
+      precisely the evidence no_visual_reference depends on.
 """
 
 import json
@@ -42,14 +45,14 @@ REPO = "SALT-NLP/SWE-chat"
 SCOPE_FILES_TOO_MANY_THRESHOLD = 8
 SCOPE_TURNS_TOO_LONG_THRESHOLD = 150
 
-# Caps that exist ONLY to stop a single pathological session (e.g. a giant
-# generated file diff, or a runaway chain-of-thought, or a tool result that
-# dumps megabytes of output) from blowing up the prompt. These are not
-# content filters — everything under the cap is passed through untouched.
+# Per-block cap only — no total/session-wide cap anymore. Exists purely so a
+# single pathological thinking block can't blow up the prompt on its own.
 MAX_THINKING_CHARS_PER_BLOCK = 4000
-MAX_TOTAL_THINKING_CHARS = 20000
+THINKING_HEAD_CHARS = 2000
+THINKING_TAIL_CHARS = 2000
+
 MAX_TOOL_DETAIL_CHARS = 400     # command / file path / generic input summary
-MAX_TOOL_RESULT_CHARS = 600     # raw tool_result text, any tool, not just tests
+MAX_TOOL_RESULT_CHARS = 600     # raw tool_result text, any tool
 MAX_USER_MESSAGE_CHARS = 2000
 
 
@@ -64,11 +67,8 @@ def load_tables():
 
 
 def claude_code_session_ids(sessions):
-    """
-    All sessions we can actually parse. Restricted to agent == 'Claude Code'
-    because other agents (Codex, Copilot CLI, Cursor, OpenCode, Gemini CLI)
-    use different event schemas entirely.
-    """
+    """All sessions we can actually parse. Restricted to agent == 'Claude
+    Code' because other agents use different event schemas entirely."""
     return [s["session_id"] for s in sessions if s["agent"] == "Claude Code"]
 
 
@@ -79,9 +79,6 @@ def path_map(logs):
 def read_transcript(session_id, paths):
     local_path = hf_hub_download(REPO, paths[session_id], repo_type="dataset")
     events = []
-    # Explicit encoding + errors="replace" so odd/invalid bytes in a
-    # transcript line get replaced rather than silently corrupting the read
-    # or throwing a hard decode error that skips the whole session.
     with open(local_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
@@ -97,9 +94,7 @@ def read_transcript(session_id, paths):
 
 def _extract_text_from_content(content):
     """Content on a tool_result / message block can be a plain string OR a
-    list of structured blocks like [{"type": "text", "text": "..."}]. Doing
-    str(content) on the list case stringifies the Python repr (braces,
-    quotes, key names and all) instead of the actual text — this avoids that."""
+    list of structured blocks like [{"type": "text", "text": "..."}]."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -114,9 +109,9 @@ def _extract_text_from_content(content):
     return str(content) if content else ""
 
 
-def _tool_call_detail(name_lower, tool_input):
+def _tool_call_detail(tool_input):
     """Short human-readable summary of a tool call's input, generic across
-    ALL tool types — no special-casing of 'test' commands or 'spec' files."""
+    ALL tool types."""
     for key in ("file_path", "path", "pattern"):
         if tool_input.get(key):
             return str(tool_input[key])[:MAX_TOOL_DETAIL_CHARS]
@@ -127,31 +122,51 @@ def _tool_call_detail(name_lower, tool_input):
     return ", ".join(f"{k}={str(v)[:120]}" for k, v in tool_input.items())[:MAX_TOOL_DETAIL_CHARS]
 
 
+def _truncate_thinking(text):
+    """Per-block cap only. If under the cap, return unchanged. If over,
+    keep the first THINKING_HEAD_CHARS and last THINKING_TAIL_CHARS (the
+    conclusion at the end is often the important part) with a note in
+    between, and flag it as truncated so the renderer can tell the judge
+    this isn't the full block."""
+    if len(text) <= MAX_THINKING_CHARS_PER_BLOCK:
+        return text, False
+    head = text[:THINKING_HEAD_CHARS]
+    tail = text[-THINKING_TAIL_CHARS:]
+    combined = (
+        f"{head}\n\n"
+        f"[... TRUNCATED — {len(text) - THINKING_HEAD_CHARS - THINKING_TAIL_CHARS:,} "
+        f"characters omitted from the middle of this thinking block ...]\n\n"
+        f"{tail}"
+    )
+    return combined, True
+
+
 def build_case_file(events):
     """
-    Builds a condensed case file. The key structural piece is `timeline`:
-    a single list of entries in the STRICT order events actually occurred
-    (user message / agent thinking / tool call), each tagged with the
-    assistant-turn number it happened at. Every tool_use produces exactly
-    one entry; its tool_result (arriving later in the event stream) gets
-    patched into that same entry in place once found, so nothing is
-    duplicated and nothing is dropped.
+    Builds a condensed case file. `timeline` is a single list of entries in
+    STRICT event order, each tagged with the MESSAGE number it occurred at
+    (message_no increments once per user OR assistant message — every
+    message gets a unique number). `total_turns` is tracked separately
+    (assistant messages only, unchanged) purely for scope_turns_too_long.
     """
-    timeline = []              # [{"kind": ..., "turn": int, ...}]
+    timeline = []
     user_messages = []         # [(text, has_image)]
     files_touched = set()
-    tool_call_by_id = {}        # tool_use_id -> the timeline entry dict (mutable, patched in place)
-    total_thinking_chars = 0
-    thinking_truncated = False
-    turn_no = 0
+    tool_call_by_id = {}
+    message_no = 0
+    total_turns = 0
 
     for event in events:
         etype = event.get("type")
+        if etype not in ("assistant", "user"):
+            continue
+        message_no += 1
+
         message = event.get("message", {})
         content = message.get("content") if isinstance(message, dict) else None
 
         if etype == "assistant":
-            turn_no += 1
+            total_turns += 1
             if isinstance(content, list):
                 for b in content:
                     if not isinstance(b, dict):
@@ -159,12 +174,12 @@ def build_case_file(events):
 
                     if b.get("type") == "thinking":
                         thinking_text = b.get("thinking", "") or ""
-                        if thinking_text and total_thinking_chars < MAX_TOTAL_THINKING_CHARS:
-                            snippet = thinking_text[:MAX_THINKING_CHARS_PER_BLOCK]
-                            timeline.append({"kind": "thinking", "turn": turn_no, "text": snippet})
-                            total_thinking_chars += len(snippet)
-                        elif thinking_text:
-                            thinking_truncated = True
+                        if thinking_text:
+                            snippet, truncated = _truncate_thinking(thinking_text)
+                            timeline.append({
+                                "kind": "thinking", "message": message_no,
+                                "text": snippet, "truncated": truncated,
+                            })
 
                     if b.get("type") == "tool_use":
                         name = b.get("name", "") or "(unnamed tool)"
@@ -177,8 +192,8 @@ def build_case_file(events):
                                 files_touched.add(fp)
 
                         entry = {
-                            "kind": "tool_call", "turn": turn_no, "id": b.get("id"),
-                            "name": name, "detail": _tool_call_detail(name_lower, tool_input),
+                            "kind": "tool_call", "message": message_no, "id": b.get("id"),
+                            "name": name, "detail": _tool_call_detail(tool_input),
                             "result": None,
                         }
                         timeline.append(entry)
@@ -195,11 +210,15 @@ def build_case_file(events):
                 text = " ".join(parts).strip()
             else:
                 text = ""
-            if text:
+            # `text or has_image`, not just `text`: a message that is ONLY a
+            # pasted screenshot has no text blocks, and dropping it would hide
+            # the attachment from the judge — which is exactly the evidence
+            # no_visual_reference turns on.
+            if text or has_image:
                 trimmed_text = text[:MAX_USER_MESSAGE_CHARS]
                 user_messages.append((trimmed_text, has_image))
                 timeline.append({
-                    "kind": "user_message", "turn": turn_no, "text": trimmed_text,
+                    "kind": "user_message", "message": message_no, "text": trimmed_text,
                     "has_image": has_image,
                 })
 
@@ -215,14 +234,11 @@ def build_case_file(events):
         "timeline": timeline,
         "user_messages": user_messages,
         "files_touched": sorted(files_touched),
-        "thinking_truncated": thinking_truncated,
-        "total_turns": turn_no,
+        "total_turns": total_turns,
     }
 
 
 def build_case_file_with_timing(session_id, paths):
-    """Same as build_case_file, but times the download and parse stages
-    separately so callers can report where time is actually going."""
     t0 = time.perf_counter()
     events = read_transcript(session_id, paths)
     t1 = time.perf_counter()
@@ -232,7 +248,10 @@ def build_case_file_with_timing(session_id, paths):
 
 
 def compute_scope_flags(case_file):
-    """Direct metadata check — no LLM needed. Two independent flags."""
+    """Direct metadata check — no LLM needed. Unchanged definitions:
+    scope_turns_too_long is still based on assistant-message count
+    (total_turns), independent of the message-numbering scheme used for
+    judge locations."""
     return {
         "scope_files_too_many": len(case_file["files_touched"]) >= SCOPE_FILES_TOO_MANY_THRESHOLD,
         "scope_turns_too_long": case_file["total_turns"] >= SCOPE_TURNS_TOO_LONG_THRESHOLD,
@@ -250,28 +269,29 @@ def is_single_message_session(case_file):
 # ----------------------------------------------------------------------
 
 def render_timeline(case_file):
-    """Chronological, typed-block rendering (inspired by VCC's "Full View"):
-    every user message, every piece of agent thinking, and every tool call
-    — including its raw result — in the exact order they occurred, each
-    tagged with the turn number it happened at. This is the ONE canonical
-    rendering used both for judge prompts and for human-readable dumps."""
+    """Chronological, typed-block rendering: every user message, every
+    piece of agent thinking, and every tool call — including its raw
+    result — in the exact order they occurred, each tagged with the
+    message number it happened at."""
     lines = []
     for entry in case_file["timeline"]:
         if entry["kind"] == "user_message":
             tag = " (image attached)" if entry["has_image"] else ""
-            lines.append(f"[user] (turn {entry['turn']}){tag}")
-            lines.append(entry["text"])
+            lines.append(f"[user] (message {entry['message']}){tag}")
+            lines.append(entry["text"] or "(no text in this message)")
         elif entry["kind"] == "thinking":
-            lines.append(f"[assistant thinking] (turn {entry['turn']})")
+            trunc_note = (
+                " [TRUNCATED — showing the first/last portion only, not the full text]"
+                if entry.get("truncated") else ""
+            )
+            lines.append(f"[assistant thinking] (message {entry['message']}){trunc_note}")
             lines.append(entry["text"])
         elif entry["kind"] == "tool_call":
-            lines.append(f"[tool_call] {entry['name']} (turn {entry['turn']})")
+            lines.append(f"[tool_call] {entry['name']} (message {entry['message']})")
             if entry["detail"]:
                 lines.append(f"input: {entry['detail']}")
             lines.append(f"result: {entry['result'] if entry['result'] else '(no result captured)'}")
         lines.append("")
-    if case_file["thinking_truncated"]:
-        lines.append("(additional thinking beyond the size cap omitted)")
     return "\n".join(lines).strip() if lines else "(empty session)"
 
 
@@ -301,7 +321,7 @@ if __name__ == "__main__":
     print(f"download time: {download_s:.2f}s | parse time: {parse_s:.2f}s")
     print(f"user messages: {len(case_file['user_messages'])} | "
           f"files touched: {len(case_file['files_touched'])} | "
-          f"total turns: {case_file['total_turns']}")
+          f"total assistant turns: {case_file['total_turns']}")
     print(f"rendered transcript size: {len(rendered):,} chars\n")
     print("=" * 70)
     print(rendered)
