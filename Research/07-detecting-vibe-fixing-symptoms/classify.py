@@ -7,43 +7,54 @@ Runnable standalone:
     python classify.py test <session_id> [call_name]
     python classify.py dump-examples [n] [out_dir]
 
-DESIGN NOTES (this revision):
-    - The old 5 separate symptoms (no_spec, no_closed_loop,
-      no_acceptance_criteria, no_visual_reference, repetitive_fix_attempts)
-      are replaced by TWO grouped categories plus one unchanged single
-      symptom:
-        * not_enough_verification (ONE LLM call) — subcategories:
-          not-tested, self-report, ask-for-manual-testing,
-          repetitive-bug-fixes
-        * not_enough_specification (ONE LLM call) — subcategories:
-          no-spec-detected, repetitive-requirements-fixes, self-report
-        * no_visual_reference (ONE LLM call, unchanged definition) — kept
-          exactly as it was.
-      scope_files_too_many / scope_turns_too_long remain metadata-only
-      checks in case_file.py, untouched.
-    - Each category call returns a "findings" LIST, not a single
-      present/absent boolean — a session can show the same or different
-      subcategories more than once, and we now capture every occurrence,
-      not just the first. Each finding carries its own subcategory,
-      location (message number(s)), and evidence.
-    - "reasoning" is still the first schema property, before "findings",
-      so the model has room to think before committing to specific findings.
-    - "location" cites MESSAGE number(s) now (not "turn"), matching
-      case_file.py's message-based numbering.
+Key decisions:
+    - Three LLM calls per session: two grouped categories plus one single
+      symptom.
+        * not_enough_verification — not-tested, self-report,
+          ask-for-manual-testing, repetitive-bug-fixes
+        * not_enough_specification — no-spec-detected,
+          repetitive-requirements-fixes, self-report
+        * no_visual_reference — no subcategories
+      scope_files_too_many / scope_turns_too_long stay metadata-only checks
+      in case_file.py.
+    - Each call returns a "findings" LIST, not a present/absent boolean: a
+      session can show the same subcategory more than once, and every
+      occurrence is captured.
+    - A finding carries a `cause_prompt` AND a list of `evidence` blocks,
+      because one location field had two incompatible consumers. The
+      statistics need attribution (one problem, one place, or a rate is not a
+      rate); an auditor needs verifiability (every place it can be seen). For
+      the repetitive-* subcategories those are provably different blocks: the
+      cause is the earlier prompt called finished, the only observable symptom
+      is the user's later complaint.
+    - Evidence entries are OBJECTS ({prompt, step, note}) — a coordinate with
+      no text cannot be checked, and being checkable is their whole point.
+    - Coordinates are TWO integers, matching the `P.S` header case_file.py
+      prints. Never a string: "4.2" in a text field is the failure mode the
+      split exists to prevent, and the validator rejects it rather than guess.
+    - "reasoning" is the first schema property, before "findings", so the
+      model has room to think before committing.
     - Structured output via response_format, with an automatic fallback to
-      plain-JSON-in-text prompting if the model/proxy rejects it. The
-      fallback resends the messages with cache_control stripped, so a proxy
-      that chokes on that field can't take both attempts down with it.
-    - Every failure and fallback is recorded in DIAGNOSTICS (and the first
-      of each kind is printed), so a run can tell you WHY calls failed
-      instead of silently degrading.
-    - Findings coming back from the model are validated against the
-      declared subcategory set before being returned — the fallback path is
-      plain-JSON prompted with no enum enforcement, so a hallucinated
-      subcategory must not reach the aggregation layer.
-    - TEMPERATURE is configurable and can be None — some models (e.g. the
-      one currently configured below) reject a custom temperature entirely
-      and only support their default.
+      plain-JSON prompting. The fallback strips cache_control, so a proxy that
+      chokes on that field can't take both attempts down.
+    - Every failure and fallback lands in DIAGNOSTICS (first of each kind is
+      printed), so a run can say WHY calls failed instead of degrading
+      silently.
+    - Coordinates are RECORDED, NEVER REPAIRED. A miscited coordinate is
+      measured behaviour of the judge, and this pipeline's output is
+      measurements of that judge — correcting it destroys the only trace it
+      happened. Nothing is renumbered and no finding is dropped for pointing
+      somewhere impossible; instead each cause gets a `cause_kind` marker
+      computed here from the timeline: "real" / "system" / "out_of_range".
+    - The one exception is an unknown `subcategory`, which is dropped: it
+      invents a result key no consumer knows about, corrupting the whole
+      aggregation rather than just its own row.
+    - Only cause_kind == "real" feeds the numerator of "% of prompts" — the
+      rest have no real prompt to be a fraction of. Excluded from the
+      numerator is not excluded from the results: they still count in
+      `problems`, appear in Examples marked, and are reported as an
+      attribution-miss rate.
+    - TEMPERATURE can be None — some models reject a custom temperature.
 """
 
 import json
@@ -57,17 +68,18 @@ import case_file as cf
 JUDGE_MODEL = "openai/gpt-5.6-luna"
 LITELLM_BASE_URL = "https://litellm.labs.jb.gg"
 
-# Some models reject a custom temperature outright (only support their
-# default). Set to a number (e.g. 0) only if your model actually supports it.
+# OPENAI_API_KEY (the LiteLLM key) is read from the environment; importing
+# case_file above already loaded the repo-root .env.
+
+# Some models reject a custom temperature and only support their default.
 TEMPERATURE = None
 
 USE_STRUCTURED_OUTPUT = True
-ATTEMPT_PROMPT_CACHING = True   # best-effort, unverified whether your proxy honors it
+ATTEMPT_PROMPT_CACHING = True   # best-effort, unverified whether the proxy honors it
 
 # Reasoning models spend part of this budget on hidden reasoning tokens before
-# emitting a single character of JSON, so a tight cap truncates the answer and
-# shows up as an unparseable-response "failure". The response itself is small;
-# be generous.
+# emitting any JSON, so a tight cap truncates the answer and surfaces as an
+# unparseable-response failure. Be generous; the response itself is small.
 MAX_COMPLETION_TOKENS = 6000
 
 # "<stage>: <detail>" -> how many times it happened. run_experiment.py dumps
@@ -78,9 +90,8 @@ _DIAGNOSTICS_REPORTED = set()
 
 def _note(stage, detail, verbose=True):
     """Record a failure/fallback reason. Prints only the first occurrence of
-    each distinct kind so a systematic problem (bad auth, response_format
-    rejected, responses truncating) is visible immediately without spamming
-    one line per session."""
+    each kind, so a systematic problem is visible immediately without one
+    line per session."""
     key = f"{stage}: {detail}"
     DIAGNOSTICS[key] += 1
     if verbose and key not in _DIAGNOSTICS_REPORTED:
@@ -234,10 +245,8 @@ SINGLE_SYMPTOM_DEFINITIONS = {
     },
 }
 
-# Unified registry of every LLM call we make. "kind" distinguishes a
-# grouped category (multiple subcategories, one call) from a single symptom
-# (no subcategories, but same findings-list shape for uniform handling
-# downstream).
+# Every LLM call we make. "kind" distinguishes a grouped category from a
+# single symptom; both return the same findings-list shape.
 CALLS = {
     "not_enough_verification": {"kind": "category", **CATEGORY_DEFINITIONS["not_enough_verification"]},
     "not_enough_specification": {"kind": "category", **CATEGORY_DEFINITIONS["not_enough_specification"]},
@@ -245,17 +254,11 @@ CALLS = {
 }
 CALL_ORDER = list(CALLS)
 
-# Which calls get the deterministic single-message-session override. This
-# mirrors the old REQUEST_QUALITY_SYMPTOMS idea: a session with no real
-# back-and-forth almost certainly isn't a genuine specification/verification
-# case. no_visual_reference is left out, same as before.
-POST_FILTER_CALLS = ("not_enough_verification", "not_enough_specification")
-
 
 def all_result_keys():
-    """Every distinct (call, subcategory) key this file can produce, in a
-    stable order. Used by run_experiment.py and report.py so both always
-    agree on the full set of keys, even ones that end up with zero hits."""
+    """Every (call, subcategory) key this file can produce, in a stable
+    order, so run_experiment.py and report.py agree on the full set even for
+    keys with zero hits."""
     keys = []
     for call_name, info in CALLS.items():
         if info["kind"] == "category":
@@ -267,7 +270,7 @@ def all_result_keys():
 
 def valid_subcategories(call_name):
     """The only subcategory values a finding for this call may carry. For a
-    single symptom that's the call name itself, which keeps the finding shape
+    single symptom that's the call name itself, keeping the finding shape
     identical across both kinds."""
     info = CALLS[call_name]
     if info["kind"] == "category":
@@ -278,6 +281,58 @@ def valid_subcategories(call_name):
 # ----------------------------------------------------------------------
 # Structured-output schemas
 # ----------------------------------------------------------------------
+
+# The judge reads a joined coordinate ("4.2") off the timeline and is asked
+# for two integers, so these descriptions spell out the split and show the
+# parse. Without the worked example the compact form invites returning the
+# string "4.2" — the failure mode the two-integer shape exists to prevent.
+_CAUSE_PROMPT_DESC = (
+    "The number P of the user prompt whose work led to this problem — a single "
+    "integer, e.g. 4, read off a '[USER P.1]' header. Prompt number only: no step, "
+    "no range, no list, no text."
+)
+_EVIDENCE_ARRAY_DESC = (
+    "Every block where this problem can actually be observed, at least one. Each "
+    "entry is one block of the timeline. These are the places a human will open to "
+    "check you, so an entry must point at a block that visibly shows something."
+)
+_EVIDENCE_PROMPT_DESC = (
+    "The prompt number P of the cited block — the FIRST of the two numbers in its "
+    "header. From a header '[thinking 4.2]': prompt = 4. An integer, never a string, "
+    "never '4.2'."
+)
+_EVIDENCE_STEP_DESC = (
+    "The step number S of the cited block — the SECOND of the two numbers in its "
+    "header. From a header '[thinking 4.2]': step = 2. An integer, never a string, "
+    "never '4.2'."
+)
+_EVIDENCE_NOTE_DESC = (
+    "One short sentence, in English, saying what is visible at that specific block."
+)
+_FINDINGS_ARRAY_DESC = (
+    "One entry per distinct problem. Empty array if none occurred. The same "
+    "subcategory can appear more than once if it happened more than once; do not "
+    "merge separate problems and do not split one problem across entries."
+)
+
+
+def _evidence_schema():
+    """The evidence list, identical for both call kinds."""
+    return {
+        "type": "array",
+        "description": _EVIDENCE_ARRAY_DESC,
+        "items": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "integer", "description": _EVIDENCE_PROMPT_DESC},
+                "step": {"type": "integer", "description": _EVIDENCE_STEP_DESC},
+                "note": {"type": "string", "description": _EVIDENCE_NOTE_DESC},
+            },
+            "required": ["prompt", "step", "note"],
+            "additionalProperties": False,
+        },
+    }
+
 
 def _build_category_schema(subcategory_keys):
     return {
@@ -293,15 +348,15 @@ def _build_category_schema(subcategory_keys):
                     },
                     "findings": {
                         "type": "array",
-                        "description": "One entry per distinct occurrence of any subcategory. Empty array if none occurred. The same subcategory can appear more than once if it happened multiple times.",
+                        "description": _FINDINGS_ARRAY_DESC,
                         "items": {
                             "type": "object",
                             "properties": {
                                 "subcategory": {"type": "string", "enum": list(subcategory_keys)},
-                                "location": {"type": "string", "description": "Which message(s) this occurrence's evidence comes from, e.g. 'message 4' or 'messages 4-6'."},
-                                "evidence": {"type": "string", "description": "One short sentence pointing to the specific evidence."},
+                                "cause_prompt": {"type": "integer", "description": _CAUSE_PROMPT_DESC},
+                                "evidence": _evidence_schema(),
                             },
-                            "required": ["subcategory", "location", "evidence"],
+                            "required": ["subcategory", "cause_prompt", "evidence"],
                             "additionalProperties": False,
                         },
                     },
@@ -328,14 +383,14 @@ def _build_single_symptom_schema():
                     },
                     "findings": {
                         "type": "array",
-                        "description": "One entry per distinct occurrence. Empty array if it never occurred.",
+                        "description": _FINDINGS_ARRAY_DESC,
                         "items": {
                             "type": "object",
                             "properties": {
-                                "location": {"type": "string", "description": "Which message(s) this occurrence's evidence comes from, e.g. 'message 4' or 'messages 4-6'."},
-                                "evidence": {"type": "string", "description": "One short sentence pointing to the specific evidence."},
+                                "cause_prompt": {"type": "integer", "description": _CAUSE_PROMPT_DESC},
+                                "evidence": _evidence_schema(),
                             },
-                            "required": ["location", "evidence"],
+                            "required": ["cause_prompt", "evidence"],
                             "additionalProperties": False,
                         },
                     },
@@ -360,18 +415,91 @@ def _schema_for(call_name):
 # ----------------------------------------------------------------------
 
 def build_shared_context(case_file):
-    """The large part of the prompt that's IDENTICAL across all 3 calls for
-    a given session. Sent as the system message so it's the shared prefix a
-    cache breakpoint can apply to (see ATTEMPT_PROMPT_CACHING)."""
+    """The large part of the prompt, IDENTICAL across all 3 calls for a
+    session. Sent as the system message so it is the shared prefix a cache
+    breakpoint can apply to (see ATTEMPT_PROMPT_CACHING).
+
+    The numbering block explains what the P.S labels mean; the schema field
+    descriptions explain how to split one into two integers. Both are needed
+    — nothing connects the labels here to the answer fields there.
+
+    Two counts go in, not one: numbering can run to 40 in a session with 24
+    real prompts, and a judge told only "24" would treat every citation above
+    it as impossible."""
+    max_number = case_file["max_prompt_number"]
+    n_real = len(case_file["user_messages"])
     return (
         "You are reviewing one coding-agent session for signs of 'vibe-fixing' "
         "(accepting fixes without proper specification or verification).\n\n"
-        "CHRONOLOGICAL SESSION TIMELINE (every user message, every piece of "
-        "agent thinking, and every tool call the agent made — including its "
-        "raw result — in the exact order they occurred, each tagged with the "
-        f"message number it happened at):\n\n{cf.render_timeline(case_file)}\n\n"
+        "CHRONOLOGICAL SESSION TIMELINE (every user message, every reply the "
+        "agent wrote back to the user, every piece of agent thinking, and "
+        "every tool call the agent made — including its raw result — in the "
+        f"exact order they occurred):\n\n{cf.render_timeline(case_file)}\n\n"
+        "HOW THE TIMELINE IS NUMBERED. Every block's header carries a two-part "
+        "coordinate `P.S` — for example `[thinking 4.2]` means prompt 4, step 2.\n"
+        "`P` is the user-prompt number: a `[USER P.1]` line opens prompt P, and "
+        "every block after it carries the same P until the next `[USER ...]` or "
+        "`[SYSTEM ...]` line.\n"
+        "`S` is the block's position inside that prompt, starting at 1.\n"
+        "`[SYSTEM P.1]` lines are NOT user prompts. They are wrappers emitted by "
+        "the tooling — slash commands, context-compaction summaries, interruptions "
+        "— and contain no request from the human, but they still consume a number, "
+        "so the numbering has gaps between real prompts. You may cite them as "
+        "evidence; never treat them as a request.\n"
+        "Read both numbers off the label — never count or compute them yourself.\n"
+        f"This session's numbering runs up to {max_number}, of which {n_real} are "
+        "real user prompts.\n\n"
+        "Note the difference between block types: '[reply-to-user P.S]' is what the "
+        "agent actually told the human, while '[thinking P.S]' is private reasoning "
+        "the human never saw. A claim the agent only made in its own thinking was "
+        "never said to the user.\n\n"
         f"FILES TOUCHED (edited/written): {len(case_file['files_touched'])} files\n"
     )
+
+
+# Appended to every call's instructions. Each paragraph fixes a specific
+# failure mode:
+#   - cause vs. evidence: for the repetitive-* subcategories the cause prompt
+#     is one where the symptom is by definition not yet observable.
+#   - "usually the same": a model asked to fill two location fields will hunt
+#     for two DIFFERENT places and find something. For four of the seven
+#     subcategories they coincide, so that has to be said out loud.
+#   - not-tested: its evidence is an absence, which has no coordinate —
+#     redirected to the block where completion is claimed, which has one.
+#   - no collapsing: merging findings that share a cause is an exact set
+#     operation done in run_experiment.py, not a job for the model.
+#   - the language rule: a Japanese session produced Japanese evidence in an
+#     English report.
+LOCATION_RULE = (
+    "FOR EACH FINDING you must give TWO different things, and they answer two "
+    "different questions.\n\n"
+    "'cause_prompt' — WHOSE WORK caused this. The number of the user prompt the "
+    "agent was WORKING ON when the problem was created, not the prompt where the "
+    "consequence surfaced. For repetitive-bug-fixes and repetitive-requirements-"
+    "fixes that means the earlier prompt whose work was treated as finished and "
+    "later turned out to be wrong, NOT the prompt in which the user complained "
+    "about it. A single integer, and never the number of a '[SYSTEM ...]' line: "
+    "those are not prompts and nobody's work belongs to them.\n\n"
+    "'evidence' — WHERE IT IS VISIBLE. One entry per block that actually shows the "
+    "problem, each with its own prompt and step numbers plus a one-sentence note. "
+    "For repetitive-bug-fixes and repetitive-requirements-fixes this is precisely "
+    "the user's later complaints — the blocks cause_prompt deliberately does not "
+    "point at. Citing a '[SYSTEM ...]' block as evidence is allowed and sometimes "
+    "correct: '[Request interrupted by user]' is evidence of something.\n\n"
+    "For self-report, ask-for-manual-testing, no-spec-detected and "
+    "no_visual_reference the cause and the evidence are normally the SAME prompt. "
+    "That is expected and correct — do not hunt for a different block just to make "
+    "the two fields differ.\n\n"
+    "For not-tested, the evidence is the block where the work is DECLARED finished "
+    "(usually a '[reply-to-user P.S]' saying it is done). You cannot cite the "
+    "absence of a test — it has no location — so cite the claim that was made "
+    "without one.\n\n"
+    "Return one finding per distinct problem. Do not merge two problems that happen "
+    "to share a cause_prompt into one finding, and do not split one problem into "
+    "several. Grouping is done afterwards, outside your answer.\n\n"
+    "Write 'reasoning' and every evidence 'note' in ENGLISH, even when the session "
+    "itself is in another language."
+)
 
 
 def build_symptom_prompt(call_name):
@@ -389,8 +517,8 @@ def build_symptom_prompt(call_name):
             "Using the session timeline given above, find EVERY occurrence of any "
             "subcategory above — not just the first. Think through the evidence in "
             "your reasoning field first, then list each occurrence in 'findings' "
-            "with its subcategory, location (message number(s)), and evidence. "
-            "Return an empty findings list if none occurred."
+            "with its subcategory, its cause_prompt, and its evidence blocks. "
+            f"Return an empty findings list if none occurred.\n\n{LOCATION_RULE}"
         )
     return (
         f"SYMPTOM TO EVALUATE: {call_name}\n\n"
@@ -399,8 +527,8 @@ def build_symptom_prompt(call_name):
         "Using the session timeline given above, find EVERY occurrence of this "
         "symptom — not just the first. Think through the evidence in your "
         "reasoning field first, then list each occurrence in 'findings' with its "
-        "location (message number(s)) and evidence. Return an empty findings list "
-        "if it never occurred."
+        "cause_prompt and its evidence blocks. Return an empty findings list if it "
+        f"never occurred.\n\n{LOCATION_RULE}"
     )
 
 
@@ -440,10 +568,9 @@ def _parse_structured_response(response):
 
 
 def _plain_messages(messages):
-    """The same messages with any structured content blocks flattened back to
-    plain strings. The fallback attempt must NOT resend cache_control: if that
-    field is what the proxy rejected, resending it verbatim would make the
-    fallback fail for the exact same reason as the first attempt."""
+    """The same messages with structured content blocks flattened to plain
+    strings. The fallback must NOT resend cache_control: if that field is what
+    the proxy rejected, the fallback would fail for the same reason."""
     plain = []
     for message in messages:
         content = message.get("content", "")
@@ -455,11 +582,130 @@ def _plain_messages(messages):
     return plain
 
 
-def _validate_findings(call_name, result, verbose=True):
-    """Normalise and validate what the model returned. The fallback path has no
-    schema/enum enforcement, so an unknown subcategory can arrive; if it reached
-    the aggregation layer it would create a result key nobody downstream knows
-    about. Drop those (recording why) rather than propagating them."""
+def _coerce_int(raw):
+    """Turn whatever came back into a plain int, or None if it isn't one.
+
+    The fallback path has no schema, so an integer can arrive as 4, "4" or
+    "prompt 4" — the same answer typed differently, all accepted.
+
+    "4.2" is NOT accepted: stripping non-digits would yield 42, a number the
+    session may well contain, pointing somewhere unrelated, with nothing left
+    to say it was invented. So exactly one run of digits is a number; two or
+    more ("4.2", "4-6", "3, 7") is a composite and is rejected, not guessed."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    runs = []
+    current = ""
+    for ch in str(raw):
+        if ch.isdigit():
+            current += ch
+        elif current:
+            runs.append(current)
+            current = ""
+    if current:
+        runs.append(current)
+    if len(runs) != 1:
+        return None
+    return int(runs[0])
+
+
+def _keep_verbatim(raw):
+    """What we store when no number could be read: the answer itself,
+    unchanged. Only guards hashability and JSON-serialisability — the cause is
+    used as part of a set key in run_experiment.py and ends up in results.json
+    — so a dict or list becomes its repr rather than something countable."""
+    if isinstance(raw, (str, int, float, bool)) or raw is None:
+        return raw
+    return repr(raw)
+
+
+def _classify_prompt_number(value, prompts, max_number):
+    """The `cause_kind` marker, computed from the timeline. Only "real" is a
+    number that exists AND belongs to something a human asked for, so only
+    "real" can enter the numerator of a rate over real prompts.
+
+    Also used on evidence prompts, where "system" is not a miss — citing
+    '[Request interrupted by user]' is legitimate — and only "out_of_range"
+    signals a problem."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return "out_of_range"
+    if not 1 <= value <= max_number:
+        return "out_of_range"
+    return "system" if prompts[value]["kind"] == "system" else "real"
+
+
+def _validate_evidence(call_name, raw_evidence, prompts, max_number, verbose):
+    """Normalise one finding's evidence list WITHOUT repairing it. Returns
+    [{prompt, step, note, prompt_kind}, ...], possibly empty.
+
+    Nothing is dropped, clamped or zeroed: an out-of-range prompt is kept and
+    marked, a step past the end of its prompt is kept as written. Repairing
+    either leaves nothing in the output to distinguish a judge that cited
+    precisely from one that guessed.
+
+    An empty list stays empty, never backfilled from the cause: a finding the
+    judge could not point at is a different observation from one it pointed at
+    its own cause."""
+    if not isinstance(raw_evidence, list):
+        if raw_evidence:
+            _note("validate",
+                  f"{call_name}: evidence was {type(raw_evidence).__name__}, not a list",
+                  verbose)
+        raw_evidence = []
+
+    clean = []
+    for item in raw_evidence:
+        if not isinstance(item, dict):
+            _note("validate",
+                  f"{call_name}: evidence entry was {type(item).__name__}, not an object",
+                  verbose)
+            continue
+        note = str(item.get("note") or "").strip()
+
+        prompt = _coerce_int(item.get("prompt"))
+        if prompt is None:
+            prompt = _keep_verbatim(item.get("prompt"))
+        prompt_kind = _classify_prompt_number(prompt, prompts, max_number)
+        if prompt_kind == "out_of_range":
+            _note("validate",
+                  f"{call_name}: evidence prompt {prompt!r} is not in 1..{max_number} "
+                  "(kept, marked)", verbose)
+
+        step = _coerce_int(item.get("step"))
+        if step is None:
+            step = _keep_verbatim(item.get("step"))
+        elif prompt_kind != "out_of_range":
+            max_step = prompts[prompt]["steps"]
+            if not 1 <= step <= max_step:
+                _note("validate",
+                      f"{call_name}: evidence step {step!r} is not in 1..{max_step} "
+                      f"for prompt {prompt} (kept as-is)", verbose)
+
+        clean.append({
+            "prompt": prompt, "step": step, "note": note,
+            "prompt_kind": prompt_kind,
+        })
+    return clean
+
+
+def _validate_findings(call_name, result, case_file, verbose=True):
+    """Normalise what the model returned and CLASSIFY its coordinates. The
+    fallback path has no schema enforcement, so an unknown subcategory or a
+    malformed coordinate can arrive.
+
+    Exactly one thing is rejected: an unknown subcategory, which invents a
+    result key no consumer knows about and corrupts the whole aggregation.
+    Everything else — a cause on a harness wrapper, a cause outside the
+    session, a step past the end of its prompt — is kept verbatim and
+    labelled. A pipeline that quietly fixes those reports a judge more
+    accurate than the one it ran.
+
+    Classification range is 1..max_prompt_number, over BOTH kinds of block,
+    not the count of real prompts: numbering runs straight through the
+    wrappers, so in a session with 24 real prompts a valid citation can read
+    37."""
     if not isinstance(result, dict):
         return {"error": f"judge returned {type(result).__name__}, expected an object"}
 
@@ -472,22 +718,46 @@ def _validate_findings(call_name, result, verbose=True):
 
     allowed = valid_subcategories(call_name)
     is_single = CALLS[call_name]["kind"] == "single"
+    prompts = case_file["prompts"]
+    max_number = case_file["max_prompt_number"]
 
     clean = []
     for finding in findings:
         if not isinstance(finding, dict):
             _note("validate", f"{call_name}: finding was {type(finding).__name__}, not an object", verbose)
             continue
-        # Single symptoms carry no subcategory of their own — inject the call
-        # name so downstream code can treat every finding uniformly.
+        # Single symptoms carry no subcategory — inject the call name so
+        # downstream code can treat every finding uniformly.
         subcategory = call_name if is_single else finding.get("subcategory")
         if subcategory not in allowed:
             _note("validate", f"{call_name}: unknown subcategory {subcategory!r}", verbose)
             continue
+
+        # Normalising notation ("4", "prompt 4") is not correcting an answer.
+        # If no number can be read, store it exactly as it arrived — guessing
+        # at "4.2" would invent a citation.
+        raw_cause = finding.get("cause_prompt")
+        cause = _coerce_int(raw_cause)
+        if cause is None:
+            cause = _keep_verbatim(raw_cause)
+        cause_kind = _classify_prompt_number(cause, prompts, max_number)
+        if cause_kind == "system":
+            _note("validate",
+                  f"{call_name}: cause_prompt {cause} is a [SYSTEM] block, not a user "
+                  "prompt (kept, marked system)", verbose)
+        elif cause_kind == "out_of_range":
+            _note("validate",
+                  f"{call_name}: cause_prompt {cause!r} is not a prompt in "
+                  f"1..{max_number} (kept, marked out_of_range)", verbose)
+
         clean.append({
             "subcategory": subcategory,
-            "location": str(finding.get("location") or "n/a"),
-            "evidence": str(finding.get("evidence") or ""),
+            "cause_prompt": cause,
+            # Ours, not the model's: the judge is never asked whether its own
+            # citation landed.
+            "cause_kind": cause_kind,
+            "evidence": _validate_evidence(
+                call_name, finding.get("evidence"), prompts, max_number, verbose),
         })
 
     result = dict(result)
@@ -504,10 +774,12 @@ def _extra_kwargs():
 
 def judge_one_call(client, case_file, call_name, model=JUDGE_MODEL, verbose=True):
     """One isolated call for one category/symptom. Returns (result, meta).
-    result = {"reasoning": str, "findings": [{"subcategory", "location",
-    "evidence"}, ...]} — "subcategory" is always present and always a declared
-    value, for both kinds, so downstream code can treat all calls uniformly.
-    On failure, result is {"error": "..."} and meta is still populated."""
+    result = {"reasoning": str, "findings": [{"subcategory", "cause_prompt",
+    "cause_kind", "evidence": [{"prompt", "step", "note", "prompt_kind"},
+    ...]}, ...]}. "subcategory" is always present and always a declared value
+    for both kinds; "cause_kind" and "prompt_kind" are computed here, not
+    returned by the model; "evidence" may be empty. On failure, result is
+    {"error": "..."} and meta is still populated."""
     info = CALLS[call_name]
     messages = _messages_for_call(case_file, call_name)
     prompt_chars = sum(_message_text_length(m) for m in messages)
@@ -529,10 +801,15 @@ def judge_one_call(client, case_file, call_name, model=JUDGE_MODEL, verbose=True
     if result is None:
         # cache_control stripped here on purpose — see _plain_messages.
         fallback_messages = _plain_messages(messages)
+        # Coordinates shown as bare integers, never "4" or "4.2". With no
+        # schema behind this path, this string is the only thing defining the
+        # shape, and a quoted example invites a string back.
         shape_hint = (
-            '{"reasoning": "...", "findings": [{"subcategory": "...", "location": "...", "evidence": "..."}]}'
+            '{"reasoning": "...", "findings": [{"subcategory": "...", "cause_prompt": 4, '
+            '"evidence": [{"prompt": 9, "step": 3, "note": "..."}]}]}'
             if info["kind"] == "category" else
-            '{"reasoning": "...", "findings": [{"location": "...", "evidence": "..."}]}'
+            '{"reasoning": "...", "findings": [{"cause_prompt": 4, '
+            '"evidence": [{"prompt": 9, "step": 3, "note": "..."}]}]}'
         )
         fallback_messages[-1] = {
             "role": "user",
@@ -555,25 +832,11 @@ def judge_one_call(client, case_file, call_name, model=JUDGE_MODEL, verbose=True
                 {"elapsed_seconds": elapsed, "prompt_chars": prompt_chars},
             )
 
-    result = _validate_findings(call_name, result, verbose)
+    result = _validate_findings(call_name, result, case_file, verbose)
 
     elapsed = time.perf_counter() - start
     meta = {"elapsed_seconds": elapsed, "prompt_chars": prompt_chars}
     return result, meta
-
-
-def apply_post_filter(call_name, result, case_file):
-    """Minimal structural safety net — no text/regex heuristics. If the
-    session has exactly one user message, clear all findings for the two
-    specification/verification calls, regardless of what the judge
-    returned. no_visual_reference is untouched (never had this override)."""
-    if not isinstance(result, dict) or "error" in result:
-        return result
-    if call_name in POST_FILTER_CALLS and cf.is_single_message_session(case_file):
-        if result.get("findings"):
-            result = dict(result)
-            result["findings"] = []
-    return result
 
 
 # ----------------------------------------------------------------------
@@ -627,13 +890,14 @@ def _test_one_session(session_id, call_name=None):
 
     case_file, download_s, parse_s = cf.build_case_file_with_timing(session_id, paths)
     print(f"download: {download_s:.2f}s | parse: {parse_s:.2f}s | "
-          f"user messages: {len(case_file['user_messages'])}\n")
+          f"real prompts: {len(case_file['user_messages'])} | "
+          f"system events: {case_file['system_events']} | "
+          f"numbering up to: {case_file['max_prompt_number']}\n")
 
     client = OpenAI(base_url=LITELLM_BASE_URL, timeout=60.0)
     calls = [call_name] if call_name else CALL_ORDER
     for name in calls:
         result, meta = judge_one_call(client, case_file, name)
-        result = apply_post_filter(name, result, case_file)
         print(f"--- {name} ---")
         print(f"  elapsed: {meta['elapsed_seconds']:.2f}s | prompt size: {meta['prompt_chars']:,} chars")
         print(f"  {result}\n")
