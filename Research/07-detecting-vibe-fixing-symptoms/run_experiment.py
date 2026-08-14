@@ -36,6 +36,13 @@ Key decisions:
     - evidence_samples is keyed by subcategory but its ENTRIES are problems:
       one (session_id, cause_prompt) pair plus every finding of that category
       on it. The draw is uniform over pairs — see EXAMPLES_PER_KEY.
+    - Every finding carries the judge's own `confidence` in 0..1 — how sure it
+      is that the finding matches the definition (see classify.CONFIDENCE_RULE).
+      It is metadata only: no count on this page is filtered or weighted by it,
+      so the numbers keep meaning the same thing as before. It reaches
+      logs/<session>.meta.json verbatim through call_records, and each finding
+      inside evidence_samples carries it too. None means the judge returned
+      something outside the scale.
     - Nothing is discarded for pointing at the wrong place. Misattributed
       findings count in problems, stay in the examples, and are tallied by
       cause_kind, which report.py turns into an attribution-miss line — a
@@ -80,7 +87,9 @@ LOGS_DIR = "logs"
 
 # Schema version of the .meta.json files. BUMP on any shape change, so a later
 # analysis can filter instead of silently mixing revisions.
-META_VERSION = 1
+#   1 -> 2: every finding carries the judge's own `confidence` (0..1), plus
+#           `confidence_raw` when the answer was outside that scale.
+META_VERSION = 2
 
 # Examples per subcategory in the report, drawn at RANDOM rather than in
 # encounter order: with first-N, one chatty session can supply every example
@@ -327,11 +336,19 @@ def run(session_ids, paths, sample=SAMPLE, seed=SEED):
                 # classify._keep_verbatim guarantees a hashable scalar even
                 # for a non-numeric answer — a verbatim '4.2' groups with
                 # itself.
-                problem_findings.setdefault((call_name, session_id, cause), []).append({
+                grouped_finding = {
                     "subcategory": subcat,
                     "cause_kind": cause_kind,
                     "evidence": evidence,
-                })
+                    # Carried per FINDING, not per problem: two findings
+                    # collapsed into one problem can disagree about how sure
+                    # the judge was, and averaging them here would hide that.
+                    "confidence": finding.get("confidence"),
+                }
+                if "confidence_raw" in finding:
+                    grouped_finding["confidence_raw"] = finding["confidence_raw"]
+                problem_findings.setdefault((call_name, session_id, cause), []).append(
+                    grouped_finding)
                 # setdefault, not [key]: an unexpected subcategory must
                 # degrade into an extra bucket rather than a KeyError that
                 # takes the rest of the session down.
@@ -382,7 +399,8 @@ def run(session_ids, paths, sample=SAMPLE, seed=SEED):
                 # whole group carries the same one.
                 "cause_kind": group[0]["cause_kind"] if group else None,
                 "findings": [
-                    {"subcategory": f["subcategory"], "evidence": f["evidence"]}
+                    {"subcategory": f["subcategory"], "evidence": f["evidence"],
+                     "confidence": f.get("confidence")}
                     for f in group
                 ],
             })

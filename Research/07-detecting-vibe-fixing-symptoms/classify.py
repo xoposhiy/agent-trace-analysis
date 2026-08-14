@@ -29,6 +29,11 @@ Key decisions:
       is the user's later complaint.
     - Evidence entries are OBJECTS ({prompt, step, note}) — a coordinate with
       no text cannot be checked, and being checkable is their whole point.
+    - Every finding also carries a `confidence` in 0..1: how sure the judge is
+      that the finding MATCHES THE DEFINITION it is filed under. It is asked
+      for after the evidence, so the number is given once the judge has already
+      committed to what it can point at. Nothing is filtered by it here — it is
+      recorded so a later analysis can cut the same run at any threshold.
     - Coordinates are TWO integers, matching the `P.S` header case_file.py
       prints. Never a string: "4.2" in a text field is the failure mode the
       split exists to prevent, and the validator rejects it rather than guess.
@@ -309,6 +314,15 @@ _EVIDENCE_STEP_DESC = (
 _EVIDENCE_NOTE_DESC = (
     "One short sentence, in English, saying what is visible at that specific block."
 )
+_CONFIDENCE_DESC = (
+    "How sure you are that this finding matches the definition it is filed under — "
+    "a number from 0 to 1. Rate the DEFINITION MATCH only: not how serious the "
+    "problem is, not how bad the session looks overall. Use above 0.9 when the "
+    "timeline shows it beyond argument, around 0.5 when the case is genuinely "
+    "borderline, and below 0.3 when you are mostly guessing. Still report a finding "
+    "you are unsure about — a low number here is how you say that; leaving it out is "
+    "not."
+)
 _FINDINGS_ARRAY_DESC = (
     "One entry per distinct problem. Empty array if none occurred. The same "
     "subcategory can appear more than once if it happened more than once; do not "
@@ -355,8 +369,12 @@ def _build_category_schema(subcategory_keys):
                                 "subcategory": {"type": "string", "enum": list(subcategory_keys)},
                                 "cause_prompt": {"type": "integer", "description": _CAUSE_PROMPT_DESC},
                                 "evidence": _evidence_schema(),
+                                # Last on purpose: the model fills the fields in
+                                # order, so it rates its own certainty after it
+                                # has written down what it can point at.
+                                "confidence": {"type": "number", "description": _CONFIDENCE_DESC},
                             },
-                            "required": ["subcategory", "cause_prompt", "evidence"],
+                            "required": ["subcategory", "cause_prompt", "evidence", "confidence"],
                             "additionalProperties": False,
                         },
                     },
@@ -389,8 +407,10 @@ def _build_single_symptom_schema():
                             "properties": {
                                 "cause_prompt": {"type": "integer", "description": _CAUSE_PROMPT_DESC},
                                 "evidence": _evidence_schema(),
+                                # See the note in _build_category_schema.
+                                "confidence": {"type": "number", "description": _CONFIDENCE_DESC},
                             },
-                            "required": ["cause_prompt", "evidence"],
+                            "required": ["cause_prompt", "evidence", "confidence"],
                             "additionalProperties": False,
                         },
                     },
@@ -501,6 +521,22 @@ LOCATION_RULE = (
     "itself is in another language."
 )
 
+# Kept separate from LOCATION_RULE because it fixes a different failure mode: a
+# judge with no way to express doubt either drops the borderline cases or
+# reports them as firmly as the obvious ones, and the aggregate cannot tell the
+# two apart afterwards.
+CONFIDENCE_RULE = (
+    "FOR EACH FINDING also give a 'confidence' from 0 to 1: how sure you are that "
+    "the finding MATCHES THE DEFINITION you are filing it under.\n\n"
+    "This is about the definition match and nothing else. Do not lower it because "
+    "the problem looks minor, and do not raise it because the session looks careless "
+    "overall. Above 0.9 means the timeline shows it beyond argument; about 0.5 means "
+    "the case is genuinely borderline; below 0.3 means you are mostly guessing.\n\n"
+    "Report the borderline cases too, with a low number, instead of leaving them out. "
+    "A finding at 0.4 and a missing finding are not the same answer, and only the "
+    "first one can be reviewed."
+)
+
 
 def build_symptom_prompt(call_name):
     """The small part that varies per call: this category's (or symptom's)
@@ -517,8 +553,10 @@ def build_symptom_prompt(call_name):
             "Using the session timeline given above, find EVERY occurrence of any "
             "subcategory above — not just the first. Think through the evidence in "
             "your reasoning field first, then list each occurrence in 'findings' "
-            "with its subcategory, its cause_prompt, and its evidence blocks. "
+            "with its subcategory, its cause_prompt, its evidence blocks, and its "
+            "confidence. "
             f"Return an empty findings list if none occurred.\n\n{LOCATION_RULE}"
+            f"\n\n{CONFIDENCE_RULE}"
         )
     return (
         f"SYMPTOM TO EVALUATE: {call_name}\n\n"
@@ -527,8 +565,9 @@ def build_symptom_prompt(call_name):
         "Using the session timeline given above, find EVERY occurrence of this "
         "symptom — not just the first. Think through the evidence in your "
         "reasoning field first, then list each occurrence in 'findings' with its "
-        "cause_prompt and its evidence blocks. Return an empty findings list if it "
-        f"never occurred.\n\n{LOCATION_RULE}"
+        "cause_prompt, its evidence blocks, and its confidence. Return an empty "
+        f"findings list if it never occurred.\n\n{LOCATION_RULE}"
+        f"\n\n{CONFIDENCE_RULE}"
     )
 
 
@@ -609,6 +648,28 @@ def _coerce_int(raw):
     if len(runs) != 1:
         return None
     return int(runs[0])
+
+
+def _coerce_confidence(raw):
+    """Read the judge's confidence as a float in 0..1, or None if it is not one.
+
+    Notation is normalised ("0.8" and 0.8 are the same answer), the VALUE is
+    not: 80 does not become 0.8 and 1.4 is not clamped to 1.0, because either
+    would turn a judge that ignored the scale into one that followed it. An
+    unreadable answer becomes None and the raw text is kept alongside it, so a
+    missing number stays visible instead of looking like low confidence."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+    else:
+        try:
+            value = float(str(raw).strip())
+        except (TypeError, ValueError):
+            return None
+    if not 0.0 <= value <= 1.0:
+        return None
+    return value
 
 
 def _keep_verbatim(raw):
@@ -750,7 +811,14 @@ def _validate_findings(call_name, result, case_file, verbose=True):
                   f"{call_name}: cause_prompt {cause!r} is not a prompt in "
                   f"1..{max_number} (kept, marked out_of_range)", verbose)
 
-        clean.append({
+        raw_confidence = finding.get("confidence")
+        confidence = _coerce_confidence(raw_confidence)
+        if confidence is None:
+            _note("validate",
+                  f"{call_name}: confidence {raw_confidence!r} is not a number in "
+                  "0..1 (kept as null)", verbose)
+
+        entry = {
             "subcategory": subcategory,
             "cause_prompt": cause,
             # Ours, not the model's: the judge is never asked whether its own
@@ -758,7 +826,15 @@ def _validate_findings(call_name, result, case_file, verbose=True):
             "cause_kind": cause_kind,
             "evidence": _validate_evidence(
                 call_name, finding.get("evidence"), prompts, max_number, verbose),
-        })
+            # The judge's own certainty that this matches the definition. Never
+            # used to drop a finding here; recorded for later analysis.
+            "confidence": confidence,
+        }
+        # Only when the number could not be read, so the common case stays
+        # small and the odd case stays auditable.
+        if confidence is None and raw_confidence is not None:
+            entry["confidence_raw"] = _keep_verbatim(raw_confidence)
+        clean.append(entry)
 
     result = dict(result)
     result["findings"] = clean
@@ -775,10 +851,12 @@ def _extra_kwargs():
 def judge_one_call(client, case_file, call_name, model=JUDGE_MODEL, verbose=True):
     """One isolated call for one category/symptom. Returns (result, meta).
     result = {"reasoning": str, "findings": [{"subcategory", "cause_prompt",
-    "cause_kind", "evidence": [{"prompt", "step", "note", "prompt_kind"},
-    ...]}, ...]}. "subcategory" is always present and always a declared value
-    for both kinds; "cause_kind" and "prompt_kind" are computed here, not
-    returned by the model; "evidence" may be empty. On failure, result is
+    "cause_kind", "evidence": [{"prompt", "step", "note", "prompt_kind"}, ...],
+    "confidence"}, ...]}. "subcategory" is always present and always a declared
+    value for both kinds; "cause_kind" and "prompt_kind" are computed here, not
+    returned by the model; "evidence" may be empty; "confidence" is the model's
+    own 0..1 rating, or None when it returned something outside that scale (the
+    original then also appears as "confidence_raw"). On failure, result is
     {"error": "..."} and meta is still populated."""
     info = CALLS[call_name]
     messages = _messages_for_call(case_file, call_name)
@@ -806,10 +884,10 @@ def judge_one_call(client, case_file, call_name, model=JUDGE_MODEL, verbose=True
         # shape, and a quoted example invites a string back.
         shape_hint = (
             '{"reasoning": "...", "findings": [{"subcategory": "...", "cause_prompt": 4, '
-            '"evidence": [{"prompt": 9, "step": 3, "note": "..."}]}]}'
+            '"evidence": [{"prompt": 9, "step": 3, "note": "..."}], "confidence": 0.8}]}'
             if info["kind"] == "category" else
             '{"reasoning": "...", "findings": [{"cause_prompt": 4, '
-            '"evidence": [{"prompt": 9, "step": 3, "note": "..."}]}]}'
+            '"evidence": [{"prompt": 9, "step": 3, "note": "..."}], "confidence": 0.8}]}'
         )
         fallback_messages[-1] = {
             "role": "user",
