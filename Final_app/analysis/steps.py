@@ -127,6 +127,7 @@ def step_dict(event: Event, index: int) -> dict:
         "text": text,
         "text_truncated": text_truncated,
         "attributed_tokens": event.attributed_tokens,
+        "attributed_cache_read": event.attributed_cache_read,
         "content_tokens": event.content_tokens,
         "tokens": event.tokens.as_dict(),
     }

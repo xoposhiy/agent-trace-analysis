@@ -69,9 +69,10 @@ const C = context.constants;
 
 let nextId = 0;
 
-function block(kind, { tokens = 0, duration = 0, messages = 1 } = {}) {
+function block(kind, { tokens = 0, duration = 0, messages = 1,
+                       working, cacheRead } = {}) {
   nextId += 1;
-  return {
+  const made = {
     id: nextId,
     kind,
     tokens: { working: tokens },
@@ -79,6 +80,14 @@ function block(kind, { tokens = 0, duration = 0, messages = 1 } = {}) {
     message_count: messages,
     inner_blocks: [],
   };
+  // Omitted entirely rather than defaulted, so the fallback chain in
+  // `blockMetric` is exercised by every fixture that does not opt in.
+  if (working !== undefined || cacheRead !== undefined) {
+    made.attributed_tokens = working || 0;
+    made.attributed_cache_read = cacheRead || 0;
+    made.attributed_total = made.attributed_tokens + made.attributed_cache_read;
+  }
+  return made;
 }
 
 // The shape of a real session: work runs separated by prose, with the human
@@ -424,6 +433,51 @@ test('each metric reads its own field', () => {
   assert.strictEqual(blockMetric(b, 'time'), 34);
   assert.strictEqual(blockMetric(b, 'messages'), 5);
   assert.strictEqual(blockMetric(b, 'money'), 12, 'unknown metric falls back');
+});
+
+test('the token metric is the whole context window, cache reads included', () => {
+  // A Read of a big file is cheap to issue and expensive to keep: on real
+  // session e6e482e6 one `Read /tmp/tracelens.png` block was 6,999 working
+  // tokens and 9,308,775 in later re-reads. Sizing by the working half alone
+  // drew that block as one of the smallest on the bar.
+  const b = block('read', { tokens: 12, working: 6999, cacheRead: 9308775 });
+
+  assert.strictEqual(blockMetric(b, 'tokens'), 9315774);
+});
+
+test('the token metric falls back a step at a time on older payloads', () => {
+  const noCacheChannel = block('read', { tokens: 12 });
+  noCacheChannel.attributed_tokens = 500;
+
+  assert.strictEqual(blockMetric(noCacheChannel, 'tokens'), 500,
+    'a payload with no cache-read field should use the working figure');
+  assert.strictEqual(blockMetric(block('read', { tokens: 12 }), 'tokens'), 12,
+    'a payload with no attribution at all should use tokens.working');
+});
+
+test('a cache-read-heavy bar still lays out without holes or overflow', () => {
+  // Including cache reads makes the distribution far heavier-tailed than the
+  // working figure: measured on session 51db4d3e the largest block came out at
+  // 6,312,920 and the smallest at 1. The layout has to survive that — a single
+  // block taking most of the flexible budget is the case CLAUDE.md §7 warns
+  // leaves the rest on the floor, and a floor is fine but a hole is not.
+  const blocks = Array.from({ length: 120 }, (_, i) =>
+    block(i % 7 === 6 ? 'user_chat' : 'read', {
+      working: 5000 + (i % 11) * 700,
+      // Three blocks hold nearly all the re-read cost.
+      cacheRead: i === 4 ? 6312920 : i === 40 ? 5291979 : i === 90 ? 4930478 : (i % 5),
+    }));
+  const height = barHeight(blocks);
+  const boxes = layoutBlocks(blocks, 'tokens', height);
+  const last = boxes[boxes.length - 1];
+
+  assert.ok(Math.max(0, ...unpaintedRuns(boxes, height)) <= HAIRLINE + 0.001,
+    'a heavy tail must not tear holes in the bar');
+  assert.ok(boxes.every((box) => box.height >= C.MIN_BLOCK),
+    'every block keeps the visible floor however small its share');
+  assert.ok(last.y + last.height <= height + 0.001, 'the layout overflowed');
+  assert.ok(boxes[4].height > boxes[5].height * 5,
+    'the block holding the context should visibly dominate');
 });
 
 test('only chatting-with-user is a marker', () => {

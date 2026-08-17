@@ -34,11 +34,12 @@ async function load() {
   if (session.model) meta.appendChild(el('span', 'pill', session.model));
   meta.appendChild(el('span', null, `last message ${absoluteTime(session.last_ts)}`));
 
-  // "Context window", not "Tokens": this is input + output + cache writes —
-  // everything that passed through the model's context — and the blocks below
-  // divide exactly this figure between them.
-  const tokenStat = stat('Context window', formatNumber(session.tokens.working));
-  tokenStat.title = `${session.tokens.total.toLocaleString()} including cache reads`
+  // "Context window", not "Tokens": every billed token, cache reads included.
+  // It has to be the total rather than `working`, because the bar below is now
+  // sized by each block's whole context-window cost — a header showing
+  // `working` would be the smaller number the blocks visibly do not sum to.
+  const tokenStat = stat('Context window', formatNumber(session.tokens.total));
+  tokenStat.title = `${session.tokens.working.toLocaleString()} excluding cache reads`
     + ` · in ${session.tokens.input.toLocaleString()}`
     + ` · out ${session.tokens.output.toLocaleString()}`
     + ` · cache write ${session.tokens.cache_creation.toLocaleString()}`
@@ -81,16 +82,10 @@ function showTip(block) {
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
 
-  // The block's share of the context window, and what it is made of: what the
-  // model wrote here, versus what this block's tool results made the next call
-  // read back. For a Read the second number is nearly all of it.
-  const share = typeof block.attributed_tokens === 'number'
-    ? block.attributed_tokens : block.tokens.working;
-  const tokens = el('span', null, `${formatNumber(share)} tokens`);
-  tokens.title = `${share.toLocaleString()} tokens of the session's context window`
-    + ` · generated here ${block.tokens.output.toLocaleString()}`
-    + ` · billed to this block's message ${block.tokens.working.toLocaleString()}`;
-  facts.appendChild(tokens);
+  // The block's share of the whole context window — cache reads included, so
+  // this is the figure the bar is sized by — then how much of it is re-reads,
+  // which is what explains a tall block that barely did anything.
+  tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
 
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   if (block.confidence !== null && block.confidence !== undefined) {

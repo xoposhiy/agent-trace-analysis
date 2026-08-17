@@ -161,7 +161,12 @@ def test_every_billed_token_lands_on_a_block(claude_home: Path):
 
 
 def test_the_total_holds_when_cache_reads_are_enormous(claude_home: Path):
-    """``cache_read`` is excluded by design, so it must not shift the total."""
+    """Cache reads ride their own channel, so they must not shift the working one.
+
+    The two are attributed separately and priced differently. 18.5M of cache
+    reads against ~380 working tokens is the shape of a real session; if any of
+    it leaked into ``attributed_tokens`` the bar and the header would part ways.
+    """
     lines = [
         user_line("u1", "go", "2026-08-01T10:00:00.000Z"),
         assistant_tool_line("a1", "msg1", "t1", "Read", {"file_path": "/repo/a.py"},
@@ -515,3 +520,344 @@ def test_no_block_of_real_work_is_ever_zero(claude_home: Path):
     assert work
     assert all(b.attributed_tokens > 0 for b in work), \
         [(b.kind, b.label, b.attributed_tokens) for b in work]
+
+
+# ----------------------------------------------------------------------
+# The cache-read channel
+# ----------------------------------------------------------------------
+# What a call re-reads from cache is its prompt prefix — the content still
+# resident in the context window. So it has a real owner, and these pin both
+# halves of that: the totals stay exact, and the cost lands on whatever is
+# actually sitting in the prompt being re-read.
+
+
+def _resident_lines(calls: int, cache_read: int) -> list[dict]:
+    """A big Read up front, then ``calls`` turns that each re-read the prefix."""
+    lines = [
+        user_line("u1", "read the file", "2026-08-01T10:00:00.000Z"),
+        assistant_tool_line("a1", "msg1", "t1", "Read", {"file_path": "/repo/big.py"},
+                            "2026-08-01T10:00:01.000Z",
+                            input_tokens=100, output_tokens=40),
+        tool_result_line("r1", "t1", "(truncated)", "2026-08-01T10:00:02.000Z",
+                         envelope={"file": {"filePath": "/repo/big.py",
+                                            "numLines": 2000,
+                                            "content": "z" * 80_000}}),
+    ]
+    for index in range(calls):
+        lines.append(assistant_text_line(
+            f"a{index + 2}", f"msg{index + 2}", f"Thinking about it ({index}).",
+            f"2026-08-01T10:{index + 3:02d}:00.000Z",
+            output_tokens=30, cache_creation=50, cache_read=cache_read))
+    return lines
+
+
+def test_every_cache_read_token_lands_on_a_block(claude_home: Path):
+    session = _loaded(claude_home, _resident_lines(calls=6, cache_read=20_000))
+    blocks = build_blocks(session, use_judge=False)
+
+    assert session.tokens.cache_read == 120_000
+    assert sum(b.attributed_cache_read for b in blocks) == session.tokens.cache_read
+
+
+def test_a_blocks_total_is_its_two_channels_added(claude_home: Path):
+    session = _loaded(claude_home, _resident_lines(calls=6, cache_read=20_000))
+    blocks = build_blocks(session, use_judge=False)
+
+    for block in blocks:
+        assert block.attributed_total == (
+            block.attributed_tokens + block.attributed_cache_read), block.label
+
+
+def test_the_two_channels_together_are_every_billed_token(claude_home: Path):
+    """The equation the bar's token axis now rests on."""
+    session = _loaded(claude_home, _resident_lines(calls=6, cache_read=20_000))
+    blocks = build_blocks(session, use_judge=False)
+
+    attributed = sum(b.attributed_total for b in blocks)
+
+    assert attributed + session.orphaned_tokens.total == session.tokens.total
+
+
+def test_the_block_that_filled_the_context_pays_for_the_re_reads(claude_home: Path):
+    """The whole point of the channel.
+
+    An 80k-character file sits in the prompt for every later call, and each of
+    those calls is billed 20,000 cache_read for reading it back. The Read is
+    what put it there, so the Read carries that cost — its own call was ~40
+    tokens.
+    """
+    session = _loaded(claude_home, _resident_lines(calls=6, cache_read=20_000))
+    blocks = build_blocks(session, use_judge=False)
+
+    read = next(b for b in blocks if b.kind == "read")
+
+    assert read.attributed_cache_read > read.attributed_tokens, \
+        "the re-reads should dwarf what the call itself was billed"
+    assert read.attributed_cache_read > 0.5 * session.tokens.cache_read, \
+        f"the resident file should carry most of the 120,000 re-read tokens," \
+        f" got {read.attributed_cache_read}"
+
+
+def test_content_arriving_last_is_not_charged_for_earlier_re_reads(claude_home: Path):
+    """A block can only be re-read by calls that came after it.
+
+    Cost accrues while content is resident, never retroactively — the direction
+    the old surplus rule had backwards. Asserted as an ordering between two turns
+    that are identical in content and in billing, so residency is the only thing
+    that can separate them. Not asserted as "the last turn is zero": it still
+    takes its slice of the session-wide baseline, which belongs to every block.
+    """
+    session = _loaded(claude_home, _resident_lines(calls=6, cache_read=20_000))
+
+    prose = sorted((e for e in session.events if e.type == "assistant" and e.text),
+                   key=lambda e: e.ts)
+    first, last = prose[0], prose[-1]
+
+    assert first.attributed_cache_read > last.attributed_cache_read, \
+        "the earlier of two identical turns sat in more prompts and must pay more"
+    assert last.attributed_cache_read < 0.05 * session.tokens.cache_read, \
+        f"the final turn was re-read by nobody, yet holds" \
+        f" {last.attributed_cache_read} of {session.tokens.cache_read}"
+
+
+def test_a_short_prompt_is_not_charged_for_the_system_prompt_being_re_read(
+        claude_home: Path):
+    """The opening prompt must not inherit the baseline's re-read cost.
+
+    The system prompt and tool definitions are in every prefix and no Event
+    carries their weight, so with nothing standing in for them the only resident
+    content — a two-word user message — absorbed the whole re-read. Measured
+    before the baseline entry existed: this fixture put 30,033 of 90,000 cache
+    reads on a 16-token prompt, and a real ``hi`` came out holding 165,554.
+
+    Same failure as the module docstring's opening example, one channel over.
+    """
+    lines = [
+        user_line("u1", "read the config", "2026-08-01T10:00:00.000Z"),
+        assistant_tool_line("a1", "m1", "t1", "Read", {"file_path": "/repo/big.py"},
+                            "2026-08-01T10:00:01.000Z",
+                            input_tokens=120, output_tokens=40),
+        tool_result_line("r1", "t1", "(truncated)", "2026-08-01T10:00:02.000Z",
+                         envelope={"file": {"filePath": "/repo/big.py",
+                                            "numLines": 1500,
+                                            "content": "z" * 60_000}}),
+    ]
+    for index in range(3):
+        lines.append(assistant_text_line(
+            f"a{index + 2}", f"m{index + 2}", f"Turn {index}.",
+            f"2026-08-01T10:0{index + 3}:00.000Z",
+            output_tokens=30, cache_creation=40, cache_read=30_000))
+    session = _loaded(claude_home, lines)
+
+    prompt = next(e for e in session.events if e.text == "read the config")
+    read = next(e for e in session.events if e.tool and e.tool.name == "Read")
+
+    assert session.tokens.cache_read == 90_000
+    assert prompt.attributed_cache_read < 0.1 * session.tokens.cache_read, \
+        f"a 15-character prompt holds {prompt.attributed_cache_read:,} cache reads"
+    assert read.attributed_cache_read > prompt.attributed_cache_read, \
+        "the 60k-character file, not the prompt, is what later calls re-read"
+
+
+def test_a_compaction_stops_older_content_earning_re_reads(claude_home: Path):
+    """After a compaction the prompt is rebuilt, so the old prefix is gone.
+
+    Without the reset a pre-compaction Read keeps collecting a share of re-reads
+    of a context window it is no longer in — the totals would still balance, so
+    this can only fail silently.
+    """
+    lines = [
+        user_line("u1", "read it", "2026-08-01T10:00:00.000Z"),
+        assistant_tool_line("a1", "msg1", "t1", "Read", {"file_path": "/repo/big.py"},
+                            "2026-08-01T10:00:01.000Z",
+                            input_tokens=100, output_tokens=40),
+        tool_result_line("r1", "t1", "(truncated)", "2026-08-01T10:00:02.000Z",
+                         envelope={"file": {"filePath": "/repo/big.py",
+                                            "numLines": 2000,
+                                            "content": "z" * 80_000}}),
+        # One call re-reads the file while it is still resident.
+        assistant_text_line("a2", "msg2", "Still reading.", "2026-08-01T10:01:00.000Z",
+                            output_tokens=30, cache_creation=50, cache_read=10_000),
+        {"uuid": "c1", "timestamp": "2026-08-01T10:02:00.000Z",
+         "isCompactSummary": True},
+        # Everything after the compaction re-reads a prefix the Read is not in.
+        assistant_tool_line("a3", "msg3", "t2", "Bash", {"command": "pytest -q"},
+                            "2026-08-01T10:03:00.000Z",
+                            output_tokens=30, cache_creation=50, cache_read=90_000),
+        tool_result_line("r2", "t2", "ok", "2026-08-01T10:03:30.000Z"),
+        assistant_text_line("a4", "msg4", "Green.", "2026-08-01T10:04:00.000Z",
+                            output_tokens=20, cache_creation=40, cache_read=90_000),
+    ]
+    session = _loaded(claude_home, lines)
+    blocks = build_blocks(session, use_judge=False)
+
+    read = next(b for b in blocks if b.kind == "read")
+
+    assert session.compaction_points, "the fixture must produce a compaction point"
+    assert sum(b.attributed_cache_read for b in blocks) == session.tokens.cache_read
+    # It may keep the 10,000 from the one pre-compaction call, and nothing from
+    # the 180,000 re-read after it.
+    assert read.attributed_cache_read <= 10_000, \
+        f"a compacted-away Read kept earning: {read.attributed_cache_read}"
+
+
+def test_a_compaction_pays_for_the_summary_it_wrote(claude_home: Path):
+    """The post-compaction prefix is the summary, and the marker owns it.
+
+    The IR stores a compaction marker with no body, so nothing else can carry
+    that weight. Leaving it unowned sent every later re-read of the summary to
+    the session-wide spread, which put it partly back on the very blocks the
+    compaction discarded.
+    """
+    lines = [
+        user_line("u1", "read it", "2026-08-01T10:00:00.000Z"),
+        assistant_tool_line("a1", "msg1", "t1", "Read", {"file_path": "/repo/big.py"},
+                            "2026-08-01T10:00:01.000Z",
+                            input_tokens=100, output_tokens=40),
+        tool_result_line("r1", "t1", "(truncated)", "2026-08-01T10:00:02.000Z",
+                         envelope={"file": {"filePath": "/repo/big.py",
+                                            "numLines": 2000,
+                                            "content": "z" * 80_000}}),
+        {"uuid": "c1", "timestamp": "2026-08-01T10:02:00.000Z",
+         "isCompactSummary": True},
+        assistant_text_line("a3", "msg3", "Carrying on.", "2026-08-01T10:03:00.000Z",
+                            output_tokens=30, cache_creation=50, cache_read=60_000),
+        assistant_text_line("a4", "msg4", "Still here.", "2026-08-01T10:04:00.000Z",
+                            output_tokens=20, cache_creation=40, cache_read=60_000),
+    ]
+    session = _loaded(claude_home, lines)
+
+    marker = next(e for e in session.events if e.type == "compaction")
+
+    assert marker.attributed_cache_read > 0, \
+        "the summary the compaction wrote was re-read by every later call"
+    assert sum(e.attributed_cache_read for e in session.events) \
+        == session.tokens.cache_read
+
+
+def test_cache_reads_with_nothing_resident_are_spread_not_dropped(claude_home: Path):
+    """A first call's prefix is the system prompt — no block put it there.
+
+    It is still real money, so it is shared across the session rather than
+    charged to whichever block happened to be first.
+    """
+    lines = [
+        user_line("u1", "hi", "2026-08-01T10:00:00.000Z"),
+        assistant_text_line("a1", "msg1", "Hello.", "2026-08-01T10:00:01.000Z",
+                            input_tokens=50, output_tokens=40, cache_read=30_000),
+        assistant_text_line("a2", "msg2", "More.", "2026-08-01T10:00:02.000Z",
+                            output_tokens=20, cache_creation=30),
+    ]
+    session = _loaded(claude_home, lines)
+    blocks = build_blocks(session, use_judge=False)
+
+    assert session.tokens.cache_read == 30_000
+    assert sum(b.attributed_cache_read for b in blocks) == 30_000
+
+
+def test_a_session_with_no_cache_reads_attributes_none(claude_home: Path):
+    """The degenerate case: the channel must stay silent, not invent a share."""
+    session = _loaded(claude_home, _mixed_lines())
+    blocks = build_blocks(session, use_judge=False)
+
+    assert session.tokens.cache_read == 0
+    assert all(b.attributed_cache_read == 0 for b in blocks)
+    assert all(b.attributed_total == b.attributed_tokens for b in blocks)
+
+
+# ----------------------------------------------------------------------
+# The work per call is bounded
+# ----------------------------------------------------------------------
+
+def _starved_lines(calls: int) -> list[dict]:
+    """Many calls, each billed far less ``fresh`` than its content weighs.
+
+    The common shape, not an edge case: ``fresh`` excludes cache reads, which
+    are ~95% of a real session's tokens, so the arrival ledger is nearly always
+    under-supplied.
+    """
+    lines = [user_line("u1", "go", "2026-08-01T10:00:00.000Z")]
+    for index in range(calls):
+        minute, second = divmod(index, 60)
+        lines.append(assistant_tool_line(
+            f"a{index}", f"msg{index}", f"t{index}", "Read",
+            {"file_path": f"/repo/f{index}.py"},
+            f"2026-08-01T11:{minute:02d}:{second:02d}.000Z",
+            output_tokens=20, cache_creation=5, cache_read=1000))
+        lines.append(tool_result_line(
+            f"r{index}", f"t{index}", "src",
+            f"2026-08-01T11:{minute:02d}:{second:02d}.500Z",
+            envelope={"file": {"filePath": f"/repo/f{index}.py",
+                               "numLines": 100, "content": "y" * 4000}}))
+    return lines
+
+
+def test_a_starved_session_does_not_re_split_its_whole_backlog(
+        claude_home: Path, monkeypatch: pytest.MonkeyPatch):
+    """The ledger has to shed entries, or the cost per call grows with the session.
+
+    Pro rata pays every debt a little and none in full, so a ``debt > 0`` filter
+    alone removes nothing and the backlog grows ~2 entries per call forever —
+    with every call re-splitting and re-sorting all of it. Counting the weights
+    that pass through ``split_exact`` is the direct measurement. Bounded, this
+    fixture measures a flat ~22 weights per call (2,112 / 4,312 / 6,512 items at
+    N = 100 / 200 / 300); unbounded it is ~N^2, which at N=300 is ~90,000.
+    """
+    from Final_app.analysis import attribution
+
+    calls = 300
+    weighed = 0
+    real_split = attribution.split_exact
+
+    def counting_split(amount, weights):
+        nonlocal weighed
+        weighed += len(weights)
+        return real_split(amount, weights)
+
+    monkeypatch.setattr(attribution, "split_exact", counting_split)
+    session = _loaded(claude_home, _starved_lines(calls))
+
+    assert len(session.events) > calls, "the fixture should be as long as claimed"
+    assert weighed < calls * attribution.LEDGER_CALLS * 10, (
+        f"{weighed} weights across {calls} calls — the backlog is not draining")
+
+
+def test_bounding_the_ledger_keeps_the_total_exact(claude_home: Path):
+    """Retiring a debt must not lose the tokens, only stop them asking."""
+    session = _loaded(claude_home, _starved_lines(40))
+    blocks = build_blocks(session, use_judge=False)
+
+    assert sum(b.attributed_tokens for b in blocks) == session.tokens.working
+    assert sum(b.attributed_cache_read for b in blocks) == session.tokens.cache_read
+
+
+# ----------------------------------------------------------------------
+# User prompts are matched to the call that read them
+# ----------------------------------------------------------------------
+
+def test_each_prompt_is_charged_to_the_call_that_followed_it(claude_home: Path):
+    """The windows are consecutive, so a prompt belongs to exactly one call.
+
+    A forward-only cursor replaced a rescan of every user event per call; this
+    pins the behaviour that rescan produced — each prompt lands once, in the
+    window it arrived in, and none is skipped or double-charged.
+    """
+    lines = [user_line("u0", "first task", "2026-08-01T10:00:00.000Z")]
+    for index in range(5):
+        lines.append(assistant_text_line(
+            f"a{index}", f"msg{index}", f"Working ({index}).",
+            f"2026-08-01T10:{index * 2 + 1:02d}:00.000Z",
+            input_tokens=200, output_tokens=40, cache_creation=300))
+        lines.append(user_line(
+            f"u{index + 1}", f"follow-up number {index}",
+            f"2026-08-01T10:{index * 2 + 2:02d}:00.000Z"))
+    session = _loaded(claude_home, lines)
+
+    prompts = [e for e in session.events if e.type == "user"]
+
+    assert len(prompts) == 6
+    # The last prompt arrived after every call, so no call ever read it.
+    assert all(e.attributed_tokens > 0 for e in prompts[:-1]), \
+        [(e.text, e.attributed_tokens) for e in prompts]
+    assert sum(e.attributed_tokens for e in session.events) \
+        == session.tokens.working

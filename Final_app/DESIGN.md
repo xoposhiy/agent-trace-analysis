@@ -154,19 +154,19 @@ outputs are clipped with their full length reported.
 
 ## How tokens are reported
 
-*What the numbers mean.*
+The bar and the session header show **every billed token, cache reads included**.
+Each block also carries its **own cache-read figure**, which the hover readout
+states next to the total with its share of it — `5.3M tokens · 5.3M re-read (99%)`.
 
-- **Cache reads are excluded.** `cache_read` is the prompt prefix re-read on
-  every call; the UI shows `input + output + cache_creation`, with the full
-  breakdown on hover.
-- **`usage` belongs to a message, not a content block.** One message's figure is
-  spread across the Events it produced: `output` by content weight, prompt-side
-  figures charged once. A per-step token number is therefore derived, not
-  measured.
-- **Attribution charges the cause.** A `Read` is charged for the file it pulled
-  into context. Block figures sum to the session header exactly.
-- **A result costs more than its call.** `ToolResult.size_chars` is what the
-  next API call pays to read back.
+Cache reads are attributed by **residency**. Every reply re-sends the whole
+conversation, so each reply's cache-read cost is divided by size among whatever is
+still in the conversation at that moment, and a block's figure is its share summed
+over every reply it was present for — roughly its own size times the number of
+replies that re-sent it. A compaction ends residency. The system prompt and tool
+definitions are in every reply but belong to no block, so they are shared across
+the session instead.
+
+Details and the reasoning behind each choice are in `analysis/attribution.py`.
 
 ## Provenance
 

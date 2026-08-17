@@ -49,9 +49,10 @@ read · 6 files in 4 dirs · 8 steps              scattered work is counted
 read · btbkb1kha.output · 8 steps · 1 failed    failures always shown
 ```
 
-**Context-window attribution** — the session's billed `input + output +
-cache_creation` divided across the blocks that caused it, so a `Read` is charged
-for the file it pulled into context. Sums to the header exactly.
+**Context-window attribution** — every billed token divided across the blocks
+that caused it, so a `Read` is charged for the file it pulled into context. Two
+figures per block: the work it added, and what later calls paid to re-read it
+while it stayed in the window. Sums to the header exactly.
 
 **Block classification** — rules for unambiguous tools, LLM judge for `Bash`
 (only the command text tells `cat foo.py` from `pytest`). Cached to
@@ -75,8 +76,8 @@ floor on hue alone. Rationale and validator output are in the header of
 ## Tests
 
 ```bash
-pytest tests -q                 # from Final_app/  — 308 tests, ~0.9s
-node --test tests/bar.test.js   # 22 layout tests (also run by pytest)
+pytest tests -q                 # from Final_app/  — 322 tests, ~0.9s
+node --test tests/*.test.js     # 32 frontend tests (also run by pytest)
 ```
 
 Tests build synthetic transcripts in `tmp_path` and point `CLAUDE_CONFIG_DIR` at
@@ -105,18 +106,17 @@ config.py               .env loading, LLM diagnostics
 See `DESIGN.md` for the pipeline, the URL scheme and what was taken from the
 Entire CLI.
 
-## Three things worth knowing
-
-**Tokens exclude cache reads.** `cache_read` is the whole prompt prefix re-read
-on every message, so summing it counts the same context hundreds of times — one
-real session totalled 13.2M tokens of which 12.5M (95%) was cache reads. The UI
-shows `input + output + cache_creation`; hover for the breakdown.
+## Two things worth knowing
 
 **Cost is per API call, not per step.** `usage` is reported once per
 `message.id`, and streaming splits that message across several JSONL lines that
 each repeat it. A per-block token figure is therefore *derived* — see
 `DESIGN.md`.
 
-**Project labels are a heuristic.** Claude Code's directory slug replaces both
-`/` and `-` with `-`, so the original path is unrecoverable. The label is a best
-guess; the raw slug is in the tooltip.
+**Project labels are a heuristic.** Claude Code names each transcript folder
+after the working directory, collapsing `/`, `_` *and* `-` all into `-`. So
+`/Users/me/Desktop/Agent_traces/agent-trace-analysis` becomes
+`-Users-me-Desktop-Agent-traces-agent-trace-analysis`, and nothing in it says
+which dashes were separators, which were underscores, and which were real
+hyphens. The label is a best guess with the home prefix dropped; the raw slug is
+in the tooltip.

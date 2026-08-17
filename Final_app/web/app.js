@@ -123,8 +123,11 @@ function sessionRow(session) {
   const project = el('span', 'pill', session.project_label);
   project.title = session.project;  // the label is a lossy heuristic
   meta.appendChild(project);
-  const tokens = el('span', null, `${formatNumber(session.tokens.working)} tokens`);
-  tokens.title = `${session.tokens.total.toLocaleString()} including cache reads`;
+  // The same figure the session page and its bar lead with — every billed
+  // token. One meaning of "tokens" across the app; the split is on hover.
+  const tokens = el('span', null, `${formatNumber(session.tokens.total)} tokens`);
+  tokens.title = `${session.tokens.working.toLocaleString()} excluding cache reads`
+    + ` · ${session.tokens.cache_read.toLocaleString()} re-read from cache`;
   meta.appendChild(tokens);
   meta.appendChild(el('span', null, `${session.tool_call_count} tool calls`));
   meta.appendChild(el('span', null, formatDuration(session.duration_s)));

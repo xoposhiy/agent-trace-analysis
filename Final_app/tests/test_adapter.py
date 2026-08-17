@@ -321,6 +321,33 @@ def test_unslug_renders_the_home_directory_itself(monkeypatch):
     assert claude_code.unslug_project("-Users-tester") == "~"
 
 
+def test_a_slug_cannot_distinguish_separator_from_underscore_from_hyphen(
+        monkeypatch):
+    """Three different real paths encode to one slug, so the label is a guess.
+
+    Verified on this machine: the directory
+    ``~/Desktop/Agent_traces/agent-trace-analysis/Final_app`` is stored as
+    ``-Users-...-Agent-traces-agent-trace-analysis-Final-app`` — one of those
+    dashes was a ``/``, one an ``_`` and one a real ``-``. Pinned because the
+    docstring and README both claim it, and because a future "improvement" that
+    presents the label as a real path would be wrong in a way nothing else
+    catches.
+    """
+    monkeypatch.setattr("os.path.expanduser", lambda p: "/Users/tester")
+
+    # What Claude Code does to a path: every one of the three becomes '-'.
+    def slug(path: str) -> str:
+        return path.replace("/", "-").replace("_", "-")
+
+    paths = ["/Users/tester/Desktop/my_repo/sub_dir",
+             "/Users/tester/Desktop/my-repo/sub-dir",
+             "/Users/tester/Desktop/my_repo/sub-dir"]
+    slugs = {slug(p) for p in paths}
+
+    assert len(slugs) == 1, f"expected one indistinguishable slug, got {slugs}"
+    assert claude_code.unslug_project(slugs.pop()) == "my-repo-sub-dir"
+
+
 # ----------------------------------------------------------------------
 # Human prompts vs what the harness injects into the user role
 # ----------------------------------------------------------------------

@@ -51,9 +51,7 @@ function showTip(block) {
 
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
-  const share = typeof block.attributed_tokens === 'number'
-    ? block.attributed_tokens : block.tokens.working;
-  facts.appendChild(el('span', null, `${formatNumber(share)} tokens`));
+  tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   tip.appendChild(facts);
 }
@@ -91,9 +89,9 @@ async function load() {
   if (agent.t_start) meta.appendChild(el('span', null, absoluteTime(agent.t_start)));
 
   document.getElementById('stats').replaceChildren(
-    stat('Tokens', formatNumber(agent.attributed_tokens),
-      `${agent.attributed_tokens.toLocaleString()} of the session's context`
-      + ' window attributed to this subagent'),
+    stat('Context window', formatNumber(tokenSplit(agent).total),
+      tokenBreakdown(tokenSplit(agent))
+      + ' — attributed to this subagent'),
     stat('Steps', String(agent.summary.steps)),
     stat('Tool calls', String(agent.summary.tool_calls)),
     stat('Failed', String(agent.summary.failed)),

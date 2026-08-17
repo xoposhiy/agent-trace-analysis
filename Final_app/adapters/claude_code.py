@@ -80,11 +80,15 @@ _NOISE_PREFIXES = ("Desktop", "Documents", "Downloads", "src", "code", "dev",
 def unslug_project(slug: str) -> str:
     """Turn ``-Users-me-Desktop-my-repo`` back into something readable.
 
-    The slug is a lossy encoding — Claude Code replaces every ``/`` **and**
-    every ``-`` in the real path with ``-``, so ``my-repo`` and ``my/repo``
-    encode identically and the original genuinely cannot be recovered. So this
-    is a display heuristic, never authoritative: the UI keeps the raw slug in a
-    tooltip.
+    The slug is a lossy encoding — Claude Code replaces every ``/``, ``_`` **and**
+    ``-`` in the real path with ``-``, so ``my-repo``, ``my_repo`` and ``my/repo``
+    all encode identically and the original genuinely cannot be recovered.
+    Verified against this machine (2026-08-17): the directory
+    ``~/Desktop/Agent_traces/agent-trace-analysis/Final_app`` is stored as
+    ``-Users-andreistan-Desktop-Agent-traces-agent-trace-analysis-Final-app``,
+    in which one ``-`` was a separator, one an underscore and one a real hyphen.
+    So this is a display heuristic, never authoritative: the UI keeps the raw
+    slug in a tooltip.
 
     We strip the home prefix and any leading scaffolding directory, then keep
     what remains. Taking only the final segment loses too much — three separate

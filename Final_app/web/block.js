@@ -119,8 +119,10 @@ function renderStep(step) {
   card.appendChild(head);
 
   const facts = el('div', 'step-facts');
-  facts.appendChild(el('span', null,
-    `${formatNumber(step.attributed_tokens)} tokens`));
+  const split = tokenSplit(step);
+  const stepTokens = el('span', null, `${formatNumber(split.total)} tokens`);
+  stepTokens.title = tokenBreakdown(split);
+  facts.appendChild(stepTokens);
   // The API call this step was billed under. Steps of one block routinely
   // share it — that is the unit `usage` is reported for, not the step.
   if (step.message_id) {
@@ -206,8 +208,10 @@ function renderAgents(container, agents) {
     const facts = el('div', 'step-facts');
     facts.appendChild(el('span', null, `${agent.block_count} blocks`));
     facts.appendChild(el('span', null, `${agent.summary.steps} steps`));
-    facts.appendChild(el('span', null,
-      `${formatNumber(agent.attributed_tokens)} tokens`));
+    const agentTokens = el('span', null,
+      `${formatNumber(tokenSplit(agent).total)} tokens`);
+    agentTokens.title = tokenBreakdown(tokenSplit(agent));
+    facts.appendChild(agentTokens);
     facts.appendChild(el('span', null, formatDuration(agent.duration_s)));
     card.appendChild(facts);
     card.appendChild(renderSummary(agent.summary));
@@ -255,13 +259,20 @@ async function load() {
       `judge ${Math.round(block.confidence * 100)}%`));
   }
 
-  const tokens = stat('Tokens', formatNumber(block.attributed_tokens),
-    `${block.attributed_tokens.toLocaleString()} of the session's context`
-    + ` window attributed to this block`
-    + ` · generated here ${block.tokens.output.toLocaleString()}`);
+  // The headline figure is the whole context-window cost, matching how the bar
+  // sized this block. Cache reads get their own tile rather than only a tooltip:
+  // on this page there is room, and for an early block they are usually the
+  // larger half — which is the thing the bar's height is actually telling you.
+  const split = tokenSplit(block);
+  const tokens = stat('Context window', formatNumber(split.total),
+    tokenBreakdown(split) + ' — attributed to this block');
+  const cacheReads = stat('Cache reads', formatNumber(split.cacheRead),
+    `what later calls paid to re-read this block's content while it stayed in`
+    + ` the context window · ${split.cacheRead.toLocaleString()} tokens`);
 
   document.getElementById('stats').replaceChildren(
     tokens,
+    cacheReads,
     stat('Steps', String(block.summary.steps)),
     stat('Tool calls', String(block.summary.tool_calls)),
     stat('Failed', String(block.summary.failed)),

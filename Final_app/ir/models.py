@@ -204,6 +204,13 @@ class Event:
     # ``Session.overhead_tokens``) to ``Session.tokens.working`` exactly.
     attributed_tokens: int = 0
 
+    # This Event's share of the session's billed ``cache_read``: what later calls
+    # paid to re-read this content while it sat in the context window. Held apart
+    # from ``attributed_tokens`` rather than added to it — the two are priced
+    # differently and answer different questions — and sums to
+    # ``Session.tokens.cache_read`` exactly. See ``analysis.attribution``.
+    attributed_cache_read: int = 0
+
     @property
     def is_subagent(self) -> bool:
         return self.agent_id is not None
@@ -294,6 +301,26 @@ class Block:
         return sum(e.attributed_tokens for e in self.events)
 
     @property
+    def attributed_cache_read(self) -> int:
+        """This block's share of the session's billed cache reads.
+
+        What every later call paid to re-read this block's content. Large for an
+        early block that put a lot into the context window and stayed there, and
+        the reason a cheap-looking ``Read`` early in a session is not cheap.
+        """
+        return sum(e.attributed_cache_read for e in self.events)
+
+    @property
+    def attributed_total(self) -> int:
+        """Every billed token attributed to this block, cache reads included.
+
+        The figure the bar's token axis paints: the whole context-window cost of
+        this block. Kept as a property over the two channels rather than a third
+        stored number, so it cannot drift from them.
+        """
+        return self.attributed_tokens + self.attributed_cache_read
+
+    @property
     def content_tokens(self) -> int:
         """Measured size of this block's own content. See ``Event``.
 
@@ -336,6 +363,8 @@ class Block:
             "duration_s": self.duration_s,
             "tokens": self.tokens.as_dict(),
             "attributed_tokens": self.attributed_tokens,
+            "attributed_cache_read": self.attributed_cache_read,
+            "attributed_total": self.attributed_total,
             "content_tokens": self.content_tokens,
             "content_tokens_measured": self.content_tokens_measured,
             "content_tokens_countable": self.content_tokens_countable,

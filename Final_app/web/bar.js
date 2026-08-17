@@ -167,11 +167,27 @@ function isMarker(block) {
 function blockMetric(block, metric) {
   if (metric === 'time') return block.duration_s;
   if (metric === 'messages') return block.message_count;
-  // `attributed_tokens`, not `tokens.working`: the latter charges a message's
+  // `attributed_total`, not `tokens.working`: the latter charges a message's
   // whole prompt-side cost to whichever Event came first in it, which put
   // 325,412 tokens on a single `Read` that did not cause any of them. The
-  // attributed figure divides the same total across whatever caused it, and
-  // still sums to the header exactly. Older payloads fall back.
+  // attributed figures divide the same totals across whatever caused them, and
+  // still sum to the header exactly.
+  //
+  // The total includes cache reads, so the axis measures the whole context
+  // window: a block that put a big file into the prompt is charged for every
+  // later call that re-read it, which is most of what it really cost. Payloads
+  // from before the cache-read channel fall back one step at a time.
+  //
+  // Known cost of this, measured on three real sessions (2026-08-17): cache
+  // reads are far heavier-tailed than the working figure, so more of the bar
+  // sits on the MIN_BLOCK floor. On 51db4d3e, 106 of 180 flexible blocks grow
+  // less than 1px (45 did under `working`), and the median block grows 0.52px
+  // rather than 2.39px. That is the distribution being faithful — the top five
+  // blocks really are half the context-window cost — but it does mean small
+  // blocks are no longer comparable to each other on this axis. A compressed
+  // (sqrt/log) scale would restore that at the price of heights no longer being
+  // proportional to cost; it has not been done, deliberately.
+  if (typeof block.attributed_total === 'number') return block.attributed_total;
   if (typeof block.attributed_tokens === 'number') return block.attributed_tokens;
   return block.tokens.working;
 }
