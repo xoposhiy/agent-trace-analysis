@@ -74,7 +74,7 @@ from openai import OpenAI
 import case_file as cf
 import classify as cl
 
-SAMPLE = 10   # default when no n is given on the command line; None = every session
+SAMPLE = 20   # default when no n is given on the command line; None = every session
 SEED = 20260809   # default RNG seed for the sample draw; override with --seed
 RESULTS_PATH = "results.json"
 
