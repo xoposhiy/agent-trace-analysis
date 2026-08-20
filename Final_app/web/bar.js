@@ -167,6 +167,15 @@ function isMarker(block) {
 function blockMetric(block, metric) {
   if (metric === 'time') return block.duration_s;
   if (metric === 'messages') return block.message_count;
+  // Dollars, priced per call at that call's own model (`analysis.pricing`),
+  // then divided across blocks by the same ledger that divides tokens — so a
+  // subagent that ran on a cheaper model does not inflate the main thread's
+  // bar just because it shares one session. Missing on a payload from before
+  // this field existed: 0 rather than NaN, same "degrade, don't crash" rule
+  // as everywhere else in this function.
+  if (metric === 'cost') {
+    return typeof block.attributed_cost === 'number' ? block.attributed_cost : 0;
+  }
   // `attributed_total`, not `tokens.working`: the latter charges a message's
   // whole prompt-side cost to whichever Event came first in it, which put
   // 325,412 tokens on a single `Read` that did not cause any of them. The
@@ -195,7 +204,7 @@ function blockMetric(block, metric) {
 // --- rendering --------------------------------------------------------
 
 function renderBar(container, blocks, options) {
-  const metric = (options && options.metric) || 'tokens';
+  const metric = (options && options.metric) || 'cost';
   const onHover = options && options.onHover;
   const onOpen = options && options.onOpen;
 

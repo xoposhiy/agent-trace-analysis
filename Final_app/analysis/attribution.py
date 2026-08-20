@@ -58,20 +58,36 @@ window rather than of the working set alone.
 
 Two figures, never one
 ----------------------
-CLAUDE.md §7 forbids *summing* cache reads into a token count, and that stands:
-``attributed_tokens`` (working) and ``attributed_cache_read`` are held apart on
-every Event, Block and payload. What the bar's token axis paints is their sum,
-because that is the question the axis asks — "how much of the context window
-went through here" — and every surface that shows the total also breaks it down.
-The trap §7 names is a 1:1 sum presented as *work done*: cache reads are ~95% of
-a real session, so calling that "tokens used" is off by ~18x. Presented as
-context-window cost, with the split one hover away, the number is the honest one.
+What CLAUDE.md §7 actually bans is the *naive* sum: adding up ``cache_read``
+across every message in a session double-, triple-, hundred-fold-counts the
+same resident content, since it gets re-billed on every later call that still
+has it in its prompt — 12.5M of a real 13.2M session total was exactly that.
+Shown as "tokens used", it overstates real work by ~18x.
+
+That is not what happens here. ``attributed_tokens`` (working) and
+``attributed_cache_read`` stay separate fields on every Event, Block and
+payload — never collapsed into one stored number — and each cache-read token
+is charged exactly once, to whichever block put that content in the context
+window, not counted again at every later re-read. The bar's token axis does
+display their sum, but as a distinct, labelled question — "how much of the
+context window went through here" — and never without the split sitting
+beside it (one hover away). A sum shown *with* its breakdown is not the trap
+§7 names; a bare sum standing in for "work done" is.
 
 What this is not
 ----------------
 Exact per-block truth. The API bills per request, so no per-block figure exists
 to be right about. This divides real totals by defensible weights: the session
 sum is exact, an individual block is an attribution.
+
+Dollars
+-------
+``attributed_cost`` rides the same ledger: every place a token share is handed
+to an Event, a matching dollar share is computed from the *call* that paid it
+— never the model of the Event receiving the blame, which can differ (a
+Sonnet main thread re-reading what a Haiku subagent wrote). That keeps a
+mixed-model session priced correctly without a second pass over the
+transcript. See ``analysis.pricing`` for the rate table.
 """
 
 from __future__ import annotations
@@ -80,6 +96,7 @@ import json
 from collections import defaultdict
 from typing import Optional
 
+from Final_app.analysis.pricing import price_for_model
 from Final_app.ir.models import (
     EV_ASSISTANT,
     EV_COMPACTION,
@@ -279,9 +296,15 @@ def split_exact(amount: int, weights: list[int]) -> list[int]:
 # ----------------------------------------------------------------------
 
 class _Call:
-    """One API request: the Events it generated, and what it was billed."""
+    """One API request: the Events it generated, and what it was billed.
 
-    __slots__ = ("key", "events", "output", "fresh", "cached", "first_ts")
+    ``model`` and the ``fresh_input``/``fresh_cache_creation`` split are kept
+    only for pricing — ``fresh`` alone is enough to attribute tokens, but a
+    dollar figure needs to know *which* rate applies to that lump.
+    """
+
+    __slots__ = ("key", "events", "output", "fresh", "cached", "first_ts",
+                 "model", "fresh_input", "fresh_cache_creation")
 
     def __init__(self, key: str, event: Event):
         self.key = key
@@ -290,6 +313,9 @@ class _Call:
         self.fresh = 0                    # input + cache_creation
         self.cached = 0                   # cache_read
         self.first_ts = event.ts
+        self.model = event.model
+        self.fresh_input = 0
+        self.fresh_cache_creation = 0
 
 
 def _calls_for(events: list[Event]) -> list[_Call]:
@@ -315,9 +341,30 @@ def _calls_for(events: list[Event]) -> list[_Call]:
         call.output += event.tokens.output
         call.fresh += event.tokens.input + event.tokens.cache_creation
         call.cached += event.tokens.cache_read
+        call.fresh_input += event.tokens.input
+        call.fresh_cache_creation += event.tokens.cache_creation
 
     ordered = sorted(calls.values(), key=lambda c: c.first_ts)
     return ordered
+
+
+def _fresh_rate(call: "_Call") -> float:
+    """Dollars per token for this call's ``fresh`` (input + cache-write) lump.
+
+    ``fresh`` mixes two channels priced ~1.25x apart, and the ledger later
+    hands out *pieces* of it to whichever content is being paid off — never
+    the whole lump to one place — so there is no single piece to look up a
+    pure input-vs-cache-write split for. Blending at the call's own actual
+    mix, rather than a session- or table-wide guess, is exact for any call
+    settled in one step and only approximate for the rare call that pays off
+    a multi-call backlog (see ``LEDGER_CALLS``) — bounded by the 1.25x spread
+    between the two channels it blends, not by the size of the backlog.
+    """
+    if call.fresh <= 0:
+        return 0.0
+    price = price_for_model(call.model)
+    return ((call.fresh_input * price.input
+             + call.fresh_cache_creation * price.cache_write) / call.fresh)
 
 
 # ----------------------------------------------------------------------
@@ -352,6 +399,7 @@ def attribute(session: Session) -> int:
     for event in session.events:
         event.attributed_tokens = 0
         event.attributed_cache_read = 0
+        event.attributed_cost = 0.0
 
     # Subagents are billed on their own transcripts, so each thread attributes
     # independently; mixing them would charge a parent call for a child's work.
@@ -363,14 +411,16 @@ def attribute(session: Session) -> int:
 
     unplaced = 0
     unplaced_cache_read = 0
+    unplaced_cost = 0.0
     for agent_id, thread_events in by_thread.items():
         # Compaction is recorded only in the main transcript, so a subagent
         # thread gets no boundaries rather than inheriting the parent's — its
         # own context window was never rebuilt at those moments.
         boundaries = session.compaction_points if agent_id is None else []
-        working, cached = _attribute_thread(thread_events, calibration, boundaries)
+        working, cached, cost = _attribute_thread(thread_events, calibration, boundaries)
         unplaced += working
         unplaced_cache_read += cached
+        unplaced_cost += cost
 
     if unplaced > 0 or unplaced_cache_read > 0:
         # Rule 3. Weighted by the working figure in both cases: it is the
@@ -386,6 +436,19 @@ def attribute(session: Session) -> int:
         for event, share in zip(placed, split_exact(unplaced_cache_read, weights)):
             event.attributed_cache_read += share
         unplaced = 0
+
+        # Dollars carry no integer-exactness requirement — nothing here is
+        # displayed as a token count — so the shared baseline's cost is spread
+        # by the same weights directly instead of through ``split_exact``.
+        if unplaced_cost > 0:
+            total_weight = sum(weights)
+            if total_weight > 0:
+                for event, weight in zip(placed, weights):
+                    event.attributed_cost += unplaced_cost * weight / total_weight
+            else:
+                share = unplaced_cost / len(placed)
+                for event in placed:
+                    event.attributed_cost += share
 
     _raise_floor(session, calibration)
     return unplaced
@@ -448,12 +511,12 @@ LEDGER_CALLS = 8
 
 
 def _attribute_thread(events: list[Event], calibration: Calibration,
-                      compaction_points: Optional[list] = None) -> tuple[int, int]:
-    """Attribute one thread. Returns ``(unplaced_working, unplaced_cache_read)``."""
+                      compaction_points: Optional[list] = None) -> tuple[int, int, float]:
+    """Attribute one thread. Returns ``(unplaced_working, unplaced_cache_read, unplaced_cost)``."""
     events = sorted(events, key=lambda e: e.ts)
     calls = _calls_for(events)
     if not calls:
-        return 0, 0
+        return 0, 0, 0.0
 
     user_events = [e for e in events if e.type == EV_USER]
 
@@ -465,20 +528,26 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
     user_cursor = 0
 
     # What is currently resident in this thread's context window, as
-    # ``[event, weight, rate_at_arrival]``. A tool call appears twice — once for
-    # the call it emitted, once for the result it brought back — because the
-    # prompt carries both and the result is usually far the larger.
+    # ``[event, weight, rate_at_arrival, cost_rate_at_arrival]``. A tool call
+    # appears twice — once for the call it emitted, once for the result it
+    # brought back — because the prompt carries both and the result is usually
+    # far the larger.
     context: list[list] = []
     context_weight = 0
 
     # The cache-read channel, kept as a running total of "re-read per unit of
-    # resident weight". A block's cache-read cost is its own weight times how
-    # much this total advanced while it was resident, which makes the whole
-    # channel two passes instead of re-splitting the prefix on every call:
-    # spreading each call's ``cache_read`` across the context directly is
-    # O(N^2), and on this channel it would run on *every* call rather than only
-    # the occasional surplus one.
+    # resident weight" — in tokens (``cumulative_rate``) and, in parallel, in
+    # dollars (``cumulative_cost_rate``, advanced by that call's own model's
+    # cache-read rate rather than a flat one). A block's cache-read earning is
+    # its own weight times how much each total advanced while it was resident,
+    # which makes the whole channel two passes instead of re-splitting the
+    # prefix on every call: spreading each call's ``cache_read`` across the
+    # context directly is O(N^2), and on this channel it would run on *every*
+    # call rather than only the occasional surplus one.
     cumulative_rate = 0.0
+    cumulative_cost_rate = 0.0
+    # id(event) -> [event, tokens_earned, dollars_earned]. ``None`` marks the
+    # unowned baseline, same as everywhere else in this function.
     cache_shares: dict[int, list] = {}
 
     boundaries = sorted(compaction_points or [])
@@ -504,28 +573,31 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
     baseline_weight = calls[0].fresh + calls[0].cached
 
     def settle_cache_reads(entries: list[list]) -> None:
-        """Bank what these entries earned while resident.
+        """Bank what these entries earned while resident, tokens and dollars.
 
         The caller discards the entries afterwards; banking is what makes that
         safe, since an entry's earnings are otherwise only implied by how far
-        ``cumulative_rate`` has moved since it arrived.
+        ``cumulative_rate``/``cumulative_cost_rate`` have moved since it arrived.
         """
-        for event, weight, rate_at_arrival in entries:
+        for event, weight, rate_at_arrival, cost_rate_at_arrival in entries:
             earned = weight * (cumulative_rate - rate_at_arrival)
-            if earned <= 0:
+            earned_cost = weight * (cumulative_cost_rate - cost_rate_at_arrival)
+            if earned <= 0 and earned_cost <= 0:
                 continue
-            share = cache_shares.setdefault(id(event), [event, 0.0])
+            share = cache_shares.setdefault(id(event), [event, 0.0, 0.0])
             share[1] += earned
+            share[2] += earned_cost
 
     # Content that has entered the prompt but has not yet been paid for, oldest
     # first. See the settlement loop below for why this cannot be per-call.
     owed: list[list] = []
 
-    context.append([None, baseline_weight, 0.0])
+    context.append([None, baseline_weight, 0.0, 0.0])
     context_weight += baseline_weight
 
     unplaced = 0
     unplaced_cache_read = 0
+    unplaced_cost = 0.0
     for index, call in enumerate(calls):
         # A compaction rebuilds the prompt from a summary, so everything older
         # stops being re-read from this point on. Bank what left the window and
@@ -538,7 +610,7 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
             context_weight = 0
             marker = markers.get(boundaries[boundary_index])
             boundary_index += 1
-            context.append([None, baseline_weight, cumulative_rate])
+            context.append([None, baseline_weight, cumulative_rate, cumulative_cost_rate])
             context_weight += baseline_weight
 
             # The summary the compaction wrote *is* the new prefix, and no other
@@ -551,7 +623,7 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
             # other entry, and the compaction block ends up paying for the
             # context it created.
             if marker is not None and call.cached > 0:
-                context.append([marker, call.cached, cumulative_rate])
+                context.append([marker, call.cached, cumulative_rate, cumulative_cost_rate])
                 context_weight += call.cached
 
         # 2. What this call re-read from cache is charged to the prefix it read:
@@ -559,18 +631,23 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
         #    the fresh part of this prompt and are billed on the other channel.
         if call.cached > 0:
             if context_weight > 0:
+                cache_read_rate = price_for_model(call.model).cache_read
                 cumulative_rate += call.cached / context_weight
+                cumulative_cost_rate += call.cached * cache_read_rate / context_weight
             else:
                 # A first call's prefix is the system prompt and tool definitions
                 # — cached from an earlier session and belonging to no block.
                 unplaced_cache_read += call.cached
+                unplaced_cost += call.cached * price_for_model(call.model).cache_read
 
         # 1. What this call produced is charged to what it produced.
         generated = call.events
+        output_rate = price_for_model(call.model).output
         for event, share in zip(
             generated, split_exact(call.output, [generated_weight(e, calibration) for e in generated])
         ):
             event.attributed_tokens += share
+            event.attributed_cost += share * output_rate
 
         # 3. What this call was newly charged to read is charged to whatever
         #    appeared in the conversation since the previous call.
@@ -603,7 +680,7 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
         # from here on it is part of what later calls re-read.
         owed.extend([event, weight, index] for event, weight in arrived)
         for event, weight in arrived:
-            context.append([event, weight, cumulative_rate])
+            context.append([event, weight, cumulative_rate, cumulative_cost_rate])
             context_weight += weight
 
         # Settle against everything still outstanding, pro rata.
@@ -631,11 +708,17 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
         # ``user_chat`` blocks across these transcripts came out at exactly
         # zero. Pro rata scales every debt down equally instead.
         remaining = call.fresh
+        # Blended at this call's own input:cache-write mix (see ``_fresh_rate``),
+        # so every piece handed out below — however this call's fresh budget
+        # ends up split across old debts and new arrivals — is priced the same
+        # way, without needing to know which channel a given piece came from.
+        fresh_rate = _fresh_rate(call)
         if owed and remaining > 0:
             debts = [entry[1] for entry in owed]
             payable = min(remaining, sum(debts))
             for entry, share in zip(owed, split_exact(payable, debts)):
                 entry[0].attributed_tokens += share
+                entry[0].attributed_cost += share * fresh_rate
                 entry[1] -= share
             remaining -= payable
 
@@ -675,6 +758,7 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
         # measured from ``cache_read`` rather than inferred from a surplus, so
         # this branch no longer has to tell that story.
         unplaced += remaining
+        unplaced_cost += remaining * fresh_rate
 
     # Bank what is still resident at the end of the thread.
     settle_cache_reads(context)
@@ -683,12 +767,12 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
     # lands exactly on the blocks despite the shares being floats.
     payable = sum(call.cached for call in calls) - unplaced_cache_read
     entries = list(cache_shares.values())
-    weights = [max(0, round(share)) for _, share in entries]
+    weights = [max(0, round(tokens_earned)) for _, tokens_earned, _ in entries]
     if payable > 0 and sum(weights) > 0:
         # The baseline stays in the weights so every proportion is computed
         # against the real prefix; only its own share is handed on rather than
         # landing on a block.
-        for (event, _), share in zip(entries, split_exact(payable, weights)):
+        for (event, _, _), share in zip(entries, split_exact(payable, weights)):
             if event is None:
                 unplaced_cache_read += share
             else:
@@ -697,4 +781,15 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
         # Cache reads with nothing resident to charge them to. Session-wide.
         unplaced_cache_read += payable
 
-    return unplaced, unplaced_cache_read
+    # Dollars need no largest-remainder pass — nothing downstream displays them
+    # as an integer count — so each entry's banked dollar earning is handed
+    # straight to its event.
+    for event, _, dollars_earned in entries:
+        if dollars_earned <= 0:
+            continue
+        if event is None:
+            unplaced_cost += dollars_earned
+        else:
+            event.attributed_cost += dollars_earned
+
+    return unplaced, unplaced_cache_read, unplaced_cost

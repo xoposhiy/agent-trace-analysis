@@ -70,7 +70,7 @@ const C = context.constants;
 let nextId = 0;
 
 function block(kind, { tokens = 0, duration = 0, messages = 1,
-                       working, cacheRead } = {}) {
+                       working, cacheRead, cost } = {}) {
   nextId += 1;
   const made = {
     id: nextId,
@@ -86,6 +86,11 @@ function block(kind, { tokens = 0, duration = 0, messages = 1,
     made.attributed_tokens = working || 0;
     made.attributed_cache_read = cacheRead || 0;
     made.attributed_total = made.attributed_tokens + made.attributed_cache_read;
+  }
+  // Same omit-rather-than-default rule as above, so a fixture that never
+  // opts into pricing exercises the "no price data yet" fallback.
+  if (cost !== undefined) {
+    made.attributed_cost = cost;
   }
   return made;
 }
@@ -427,12 +432,13 @@ test('a subagent band opens like any other block', () => {
 // --- the metric accessor ----------------------------------------------
 
 test('each metric reads its own field', () => {
-  const b = block('read', { tokens: 12, duration: 34, messages: 5 });
+  const b = block('read', { tokens: 12, duration: 34, messages: 5, cost: 0.03 });
 
   assert.strictEqual(blockMetric(b, 'tokens'), 12);
   assert.strictEqual(blockMetric(b, 'time'), 34);
   assert.strictEqual(blockMetric(b, 'messages'), 5);
-  assert.strictEqual(blockMetric(b, 'money'), 12, 'unknown metric falls back');
+  assert.strictEqual(blockMetric(b, 'cost'), 0.03);
+  assert.strictEqual(blockMetric(b, 'money'), 12, 'unknown metric falls back to tokens');
 });
 
 test('the token metric is the whole context window, cache reads included', () => {
@@ -453,6 +459,39 @@ test('the token metric falls back a step at a time on older payloads', () => {
     'a payload with no cache-read field should use the working figure');
   assert.strictEqual(blockMetric(block('read', { tokens: 12 }), 'tokens'), 12,
     'a payload with no attribution at all should use tokens.working');
+});
+
+test('the cost metric reads attributed_cost, not tokens', () => {
+  const cheap = block('read', { tokens: 9000, cost: 0.002 });
+  const pricey = block('write', { tokens: 10, cost: 5.5 });
+
+  assert.strictEqual(blockMetric(cheap, 'cost'), 0.002);
+  assert.strictEqual(blockMetric(pricey, 'cost'), 5.5);
+});
+
+test('the cost metric can size a bar the opposite way from the token metric', () => {
+  // A block that generated few tokens on an expensive model can cost more
+  // than one that generated many tokens on a cheap one — the whole reason
+  // "retrospective cost" is its own axis rather than a rescaled token count.
+  const blocks = [
+    block('read', { tokens: 9000, cost: 0.01 }),
+    block('write', { tokens: 10, cost: 5.5 }),
+  ];
+  const height = barHeight(blocks);
+
+  const byTokens = layoutBlocks(blocks, 'tokens', height);
+  const byCost = layoutBlocks(blocks, 'cost', height);
+
+  assert.ok(byTokens[0].height > byTokens[1].height,
+    'the 9000-token block should dominate under "tokens"');
+  assert.ok(byCost[1].height > byCost[0].height,
+    'the $5.50 block should dominate under "cost"');
+});
+
+test('the cost metric falls back to 0 on a payload with no price data yet', () => {
+  const noPricing = block('read', { tokens: 12 });
+
+  assert.strictEqual(blockMetric(noPricing, 'cost'), 0);
 });
 
 test('a cache-read-heavy bar still lays out without holes or overflow', () => {

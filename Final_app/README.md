@@ -60,8 +60,7 @@ while it stayed in the window. Sums to the header exactly.
 judged once ever across all sessions.
 
 Not yet: problem detection and the severity filter (control present but
-disabled), the problem-specific pane, and money as a Y-axis metric (needs a
-price table).
+disabled), and the problem-specific pane.
 
 ### Colours
 

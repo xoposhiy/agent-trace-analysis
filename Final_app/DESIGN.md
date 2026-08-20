@@ -213,6 +213,5 @@ bar's layout maths (`tests/bar.test.js`, also run by pytest).
 1. Problem detection, the severity filter, the Problems tab
 2. The problem-specific pane — a second bar beside the main one, anchored to
    event `uuid` ranges rather than block indexes or timestamps
-3. Money as a Y-axis metric (needs a price table keyed by `message.model`)
-4. A richer hover readout
-5. Other vendors — the adapter boundary exists, only Claude Code is written
+3. A richer hover readout
+4. Other vendors — the adapter boundary exists, only Claude Code is written

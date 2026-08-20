@@ -106,6 +106,31 @@ function tokenBreakdown(split) {
     + ` · ${split.cacheRead.toLocaleString()} re-read from cache by later calls`;
 }
 
+// --- cost figures -------------------------------------------------------
+
+// Below a cent, two decimal places rounds to "$0.00" for almost every block
+// on a real bar — most cost a fraction of a cent — so small amounts get more
+// digits rather than reading as free.
+function formatCost(dollars) {
+  if (!dollars) return '$0.00';
+  if (dollars < 0.01) return `$${dollars.toFixed(4)}`;
+  return `$${dollars.toFixed(2)}`;
+}
+
+// The hover fact for a block's dollar share, alongside `tokenFacts`. Unlike
+// the token split, a cost has no cache-read-shaped trap to guard against —
+// CLAUDE.md §7 is about summing cache reads into a token *count*, and a
+// dollar spent re-reading cache is exactly as real as a dollar spent on
+// output — so this is one figure, not a pair.
+function costFact(block) {
+  const cost = typeof block.attributed_cost === 'number' ? block.attributed_cost : 0;
+  const fact = el('span', null, formatCost(cost));
+  fact.title = 'This block\'s share of the session\'s bill — priced per call at'
+    + ' the model that call actually ran on, divided across blocks the same'
+    + ' way the token figures above are.';
+  return fact;
+}
+
 // --- DOM --------------------------------------------------------------
 
 function el(tag, className, text) {

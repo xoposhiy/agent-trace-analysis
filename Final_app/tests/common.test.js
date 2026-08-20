@@ -29,7 +29,8 @@ const context = vm.createContext({
 });
 vm.runInContext(SOURCE, context);
 
-const { tokenSplit, tokenBreakdown, tokenFacts, formatNumber, formatDuration } = context;
+const { tokenSplit, tokenBreakdown, tokenFacts, formatNumber, formatDuration,
+       formatCost, costFact } = context;
 
 // --- the two channels -------------------------------------------------
 
@@ -148,4 +149,31 @@ test('a duration reads in the largest unit that fits', () => {
   assert.strictEqual(formatDuration(600), '10m');
   assert.strictEqual(formatDuration(3600), '1h');
   assert.strictEqual(formatDuration(5400), '1h 30m');
+});
+
+// --- retrospective cost -------------------------------------------------
+
+test('cost under a cent gets more digits so it does not read as free', () => {
+  // Most blocks on a real bar cost a fraction of a cent — two decimal places
+  // would round nearly all of them down to "$0.00".
+  assert.strictEqual(formatCost(0.0034), '$0.0034');
+  assert.strictEqual(formatCost(0), '$0.00');
+  assert.strictEqual(formatCost(undefined), '$0.00');
+});
+
+test('cost a cent or over reads as ordinary currency', () => {
+  assert.strictEqual(formatCost(6.3442), '$6.34');
+  assert.strictEqual(formatCost(0.01), '$0.01');
+});
+
+test('the cost fact reads a block\'s attributed_cost', () => {
+  const fact = costFact({ attributed_cost: 1.5 });
+
+  assert.strictEqual(fact.textContent, '$1.50');
+});
+
+test('the cost fact falls back to zero on a payload with no price data yet', () => {
+  const fact = costFact({});
+
+  assert.strictEqual(fact.textContent, '$0.00');
 });

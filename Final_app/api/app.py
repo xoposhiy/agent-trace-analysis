@@ -350,6 +350,7 @@ def _agent_detail(agent: Block, summary_only: bool = False) -> dict:
         "attributed_tokens": agent.attributed_tokens,
         "attributed_cache_read": agent.attributed_cache_read,
         "attributed_total": agent.attributed_total,
+        "attributed_cost": agent.attributed_cost,
         "message_count": agent.message_count,
         "summary": step_summary(steps),
         "block_count": len(agent.inner_blocks),

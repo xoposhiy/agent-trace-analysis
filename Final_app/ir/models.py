@@ -211,6 +211,15 @@ class Event:
     # ``Session.tokens.cache_read`` exactly. See ``analysis.attribution``.
     attributed_cache_read: int = 0
 
+    # This Event's share of the session's dollar cost, priced per call at that
+    # call's own model — unlike the two fields above, this is already the sum
+    # of every billed channel (output, fresh input/cache-write, cache-read),
+    # because a dollar has no equivalent of CLAUDE.md §7's "don't sum cache
+    # reads into a token count" trap: a dollar spent re-reading cache is exactly
+    # as real as a dollar spent on output. See ``analysis.attribution`` and
+    # ``analysis.pricing``.
+    attributed_cost: float = 0.0
+
     @property
     def is_subagent(self) -> bool:
         return self.agent_id is not None
@@ -232,6 +241,9 @@ class Event:
             "tool": self.tool.as_dict() if self.tool else None,
             "text": self.text,
             "is_human_prompt": self.is_human_prompt,
+            "attributed_tokens": self.attributed_tokens,
+            "attributed_cache_read": self.attributed_cache_read,
+            "attributed_cost": self.attributed_cost,
         }
 
 
@@ -321,6 +333,17 @@ class Block:
         return self.attributed_tokens + self.attributed_cache_read
 
     @property
+    def attributed_cost(self) -> float:
+        """This block's dollar share of the session's bill.
+
+        Every billed channel already summed (see ``Event.attributed_cost``),
+        each priced at the model of the call that was actually charged for it
+        — correct even when a subagent used a different, differently-priced
+        model than the main thread.
+        """
+        return sum(e.attributed_cost for e in self.events)
+
+    @property
     def content_tokens(self) -> int:
         """Measured size of this block's own content. See ``Event``.
 
@@ -365,6 +388,7 @@ class Block:
             "attributed_tokens": self.attributed_tokens,
             "attributed_cache_read": self.attributed_cache_read,
             "attributed_total": self.attributed_total,
+            "attributed_cost": self.attributed_cost,
             "content_tokens": self.content_tokens,
             "content_tokens_measured": self.content_tokens_measured,
             "content_tokens_countable": self.content_tokens_countable,
@@ -456,6 +480,21 @@ class Session:
         return total + self.orphaned_tokens
 
     @property
+    def attributed_cost(self) -> float:
+        """The whole session's dollar bill, attributed across its Events.
+
+        Equal to summing every block's ``attributed_cost`` — the same Events,
+        just grouped — which is why this is the number the detail page's
+        header shows: it agrees with the bar underneath it by construction,
+        the same guarantee ``tokens``/``attributed_total`` already give for
+        token counts. Excludes ``orphaned_tokens`` for the same reason the
+        token attribution does: there is no Event to hang a rate on for usage
+        that produced none, so a session with any is a dollar short of exact
+        — rare enough (1 message of 106 in a real session) not to chase.
+        """
+        return sum(e.attributed_cost for e in self.events)
+
+    @property
     def tool_calls(self) -> list[Event]:
         return [e for e in self.events if e.type == EV_TOOL_USE]
 
@@ -485,6 +524,7 @@ class Session:
             "last_ts": self.last_ts.isoformat() if self.last_ts else None,
             "duration_s": self.duration_s,
             "tokens": self.tokens.as_dict(),
+            "attributed_cost": self.attributed_cost,
             "message_count": len(self.events),
             "tool_call_count": len(self.tool_calls),
             "subagent_count": len(self.subagent_ids),

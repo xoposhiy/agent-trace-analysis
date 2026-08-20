@@ -416,6 +416,18 @@ def test_the_api_divides_the_context_window_across_the_blocks(
     assert in_blocks == body["tokens"]["working"]
 
 
+def test_the_session_header_agrees_with_the_bar_on_retrospective_cost(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """session.js's header stat reads ``attributed_cost`` off the same body."""
+    body = client.get(f"/api/sessions/{simple_session.stem}").json()
+
+    assert "attributed_cost" in body
+    assert body["attributed_cost"] > 0
+    assert body["attributed_cost"] == pytest.approx(
+        sum(b["attributed_cost"] for b in body["blocks"]))
+
+
 def test_attribution_survives_the_session_cache(
     client: TestClient, claude_home: Path, simple_session: Path
 ):
@@ -703,6 +715,21 @@ def test_a_subagent_serves_its_own_blocks_for_a_bar_of_its_own(
     # Then Grep and Read merge into one `read`.
     assert [block["kind"] for block in body["blocks"]] == ["coordination", "read"]
     assert body["blocks"][1]["message_count"] == 2
+
+
+def test_a_subagent_detail_reports_its_own_retrospective_cost(
+    client: TestClient, claude_home: Path, session_with_subagent: Path
+):
+    """agent.js's header stat reads this field directly off the subagent."""
+    session_id = session_with_subagent.stem
+    agent_id = _first_agent_id(client, session_id)
+
+    body = client.get(f"/api/sessions/{session_id}/agents/{agent_id}").json()
+
+    assert "attributed_cost" in body
+    assert body["attributed_cost"] > 0
+    assert body["attributed_cost"] == pytest.approx(
+        sum(b["attributed_cost"] for b in body["blocks"]))
 
 
 def test_each_parallel_subagent_serves_only_its_own_work(

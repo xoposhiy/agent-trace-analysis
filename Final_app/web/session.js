@@ -45,8 +45,17 @@ async function load() {
     + ` · cache write ${session.tokens.cache_creation.toLocaleString()}`
     + ` · cache read ${session.tokens.cache_read.toLocaleString()}`;
 
+  // Sums to exactly the same figure as the bar underneath it — every block's
+  // `attributed_cost` added up — because both come from the one attribution
+  // pass in `analysis.attribution`. See `Session.attributed_cost`.
+  const costStat = stat('Retrospective cost', formatCost(session.attributed_cost));
+  costStat.title = 'Priced per call at Anthropic\'s rate for the model that call'
+    + ' actually ran on — an attribution across the session\'s blocks, the'
+    + ' dollar counterpart of the context-window figure beside it.';
+
   document.getElementById('stats').replaceChildren(
     tokenStat,
+    costStat,
     stat('Messages', formatNumber(session.message_count)),
     stat('Tool calls', formatNumber(session.tool_call_count)),
     stat('Subagents', String(session.subagent_count)),
@@ -86,6 +95,7 @@ function showTip(block) {
   // this is the figure the bar is sized by — then how much of it is re-reads,
   // which is what explains a tall block that barely did anything.
   tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  facts.appendChild(costFact(block));
 
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   if (block.confidence !== null && block.confidence !== undefined) {

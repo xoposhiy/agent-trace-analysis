@@ -52,6 +52,7 @@ function showTip(block) {
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
   tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  facts.appendChild(costFact(block));
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   tip.appendChild(facts);
 }
@@ -92,6 +93,9 @@ async function load() {
     stat('Context window', formatNumber(tokenSplit(agent).total),
       tokenBreakdown(tokenSplit(agent))
       + ' — attributed to this subagent'),
+    stat('Retrospective cost', formatCost(agent.attributed_cost),
+      'This subagent\'s share of the session\'s bill, priced at whichever'
+      + ' model this subagent actually ran on.'),
     stat('Steps', String(agent.summary.steps)),
     stat('Tool calls', String(agent.summary.tool_calls)),
     stat('Failed', String(agent.summary.failed)),
