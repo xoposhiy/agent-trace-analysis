@@ -59,8 +59,18 @@ while it stayed in the window. Sums to the header exactly.
 `~/.cache/tracelens/tool_kinds.json` by `hash(tool + input)`, so a command is
 judged once ever across all sessions.
 
-Not yet: problem detection and the severity filter (control present but
-disabled), and the problem-specific pane.
+**Problems tab** — pages over every session's own detectors and lists what
+they find, sortable by dollar or percent saving, each row linking to its
+session. Two detectors run today: a missed **plan-mode** opportunity (a
+front-loaded reading phase never wrapped in plan mode) and **independent task
+switching** (a session that pursued several unrelated goals at once,
+LLM-segmented, with no offline fallback). Each session page shows its own
+problems in a **problem-specific panel**, and each problem opens its own page
+with the session's plain bar beside the same bar with the suggested split cut
+into it.
+
+Not yet: the child/tangent "sub-agent opportunity" pattern, and a richer
+hover readout.
 
 ### Colours
 
@@ -97,6 +107,9 @@ analysis/attribution.py billed tokens -> the blocks that caused them
 analysis/labels.py      what a block calls itself on the bar
 analysis/steps.py       per-step detail for the block page
 analysis/tokens.py      exact per-content-block counts (optional, needs VPN)
+analysis/problems.py    runs every problem detector over a session
+analysis/plan_mode.py   detects a missed plan-mode opportunity
+analysis/task_forest.py detects independent task switching (LLM-only)
 api/app.py              FastAPI: JSON API + pages
 web/                    vanilla JS + CSS, no build step
 config.py               .env loading, LLM diagnostics

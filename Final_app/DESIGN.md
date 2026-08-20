@@ -4,7 +4,8 @@ Local dashboard: reads Claude Code traces, draws each session as a vertical bar
 of coloured blocks, and drills down to what each block actually did.
 
 **Status:** session list, bar, block pages and subagent drill-down work.
-Problem detection not started.
+Problem detection is live: a Problems tab pages over every session's
+detectors, and each session page shows its own problem-specific panel.
 
 ---
 
@@ -201,17 +202,50 @@ analysis/labels.py           what a block calls itself
 web/bar.js                4. draw
 analysis/steps.py         5. per-step detail
 web/block.js  web/agent.js   the drill-down pages
-ir/models.py              Event / Block / Session
+analysis/problems.py      6. problem detection: runs every detector
+analysis/plan_mode.py        missed plan-mode opportunity
+analysis/task_forest.py      independent task switching
+web/problem.js                the two-bar comparison page
+ir/models.py              Event / Block / Session / Problem
 api/app.py                FastAPI
 ```
 
-Tests: `pytest tests -q` — 308, offline, no VPN. Plus 22 Node tests for the
+Tests: `pytest tests -q` — 322, offline, no VPN. Plus 22 Node tests for the
 bar's layout maths (`tests/bar.test.js`, also run by pytest).
+
+## 6. Problem detection
+
+*What the Problems tab and each session's problem panel show.*
+
+`analysis/problems.py` runs every detector over a session and collects
+whatever they find (`ir.models.Problem`); `api/app.py` exposes this two ways:
+`/api/problems` pages over sessions for the tab's cross-session list, and each
+session's own payload carries its own `problems` for the session page's panel
+(`web/session.js`). Every problem links to `/session/<id>/problem/<problemId>`
+(`web/problem.js`), which draws the session's plain bar beside the same bar
+with the suggested split cut into it, so a suggestion can be inspected without
+folding it into the page everyone opens by default.
+
+Two detectors exist today, each its own module with its own `detect(session)`:
+
+- **`analysis/plan_mode.py`** — a session that opens with a long run of `read`
+  blocks before any real edit or command, and never entered plan mode for it.
+  Rule-based, no LLM needed. Prices what plan mode *plus clearing context on
+  approval* would have saved, using `analysis/chunk_split_model.py`'s
+  linear-context-ramp cost model, ported unmodified from a prior prototype
+  (`Local_app/chunk_split_model.py`).
+- **`analysis/task_forest.py`** — a session that pursued several independent
+  goals at once. Has **no offline fallback**: telling genuinely unrelated
+  goals apart from phases of one feature needs an LLM to segment every user
+  prompt into a hierarchical task id (`T1`, `T1.1`, …); with no LLM available
+  `detect` always returns `None`. Only top-level switches are priced and
+  visualized today — the `T1.1` child/tangent pattern is a distinct, not yet
+  built "sub-agent opportunity" detector. Segmentation and pricing are both
+  ported near-verbatim from the same prior prototype
+  (`Local_app/session_core.py`, `Local_app/split_advisor.py`).
 
 ## Left to do
 
-1. Problem detection, the severity filter, the Problems tab
-2. The problem-specific pane — a second bar beside the main one, anchored to
-   event `uuid` ranges rather than block indexes or timestamps
-3. A richer hover readout
-4. Other vendors — the adapter boundary exists, only Claude Code is written
+1. The child/tangent "sub-agent opportunity" detector
+2. A richer hover readout
+3. Other vendors — the adapter boundary exists, only Claude Code is written
