@@ -64,6 +64,48 @@ async function load() {
   );
 
   drawBar(session);
+  renderSessionProblems(session.problems || []);
+}
+
+// --- problems -----------------------------------------------------------
+
+// This session's own detected problems, each linking to its dedicated
+// two-bar comparison page (`/session/{id}/problem/{id}` — see problem.js).
+// This panel just says *that* and *why briefly*; the comparison itself lives
+// on that page, not here.
+function sessionProblemRow(problem) {
+  const link = el('a', 'row');
+  link.href = `/session/${encodeURIComponent(sessionId)}/problem/${encodeURIComponent(problem.id)}`;
+
+  const head = el('div', 'row-head');
+  head.appendChild(el('span', 'row-title', problem.title));
+  head.appendChild(el('span', `pill pill-severity-${problem.severity}`, problem.severity));
+  link.appendChild(head);
+
+  link.appendChild(el('div', 'row-detail', problem.detail));
+  if (problem.data && problem.data.justification) {
+    link.appendChild(el('div', 'row-justification', `“${problem.data.justification}”`));
+  }
+  return link;
+}
+
+function renderSessionProblems(problems) {
+  const container = document.getElementById('session-problems');
+  if (!problems.length) {
+    container.replaceChildren();
+    return;
+  }
+
+  const list = el('div', 'list');
+  problems.forEach((problem) => list.appendChild(sessionProblemRow(problem)));
+  container.replaceChildren(el('h3', 'section-h', 'Problems detected'), list);
+}
+
+// A block opens in its own tab, so the bar stays where it is and several
+// blocks can be compared side by side.
+function openBlock(_block, index) {
+  window.open(`/session/${encodeURIComponent(sessionId)}/block/${index}`,
+    '_blank', 'noopener');
 }
 
 // --- the bar ----------------------------------------------------------
@@ -123,13 +165,6 @@ function drawBar(session) {
   // is taller than the viewport. Capping it at one screen — as this did until
   // 2026-08-05 — left no proportional space in the layout, so every block
   // rendered at the 3px floor and the metric selector had no visible effect.
-  // A block opens in its own tab, so the bar stays where it is and several
-  // blocks can be compared side by side.
-  const openBlock = (_block, index) => {
-    window.open(`/session/${encodeURIComponent(sessionId)}/block/${index}`,
-      '_blank', 'noopener');
-  };
-
   const draw = () => renderBar(document.getElementById('bar'), blocks, {
     metric: select.value,
     onHover: showTip,

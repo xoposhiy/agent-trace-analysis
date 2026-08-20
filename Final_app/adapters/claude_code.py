@@ -511,9 +511,9 @@ def parse_transcript(
     """Parse one transcript file into Events plus a metadata bag.
 
     Returns ``(events, meta)`` where meta carries ``ai_title``, ``git_branch``,
-    ``model``, ``vendor_version``, ``user_prompts``, ``compaction_points``, and
-    ``spawned`` (a list of ``{agent_id, description}`` for subagents launched
-    from this transcript).
+    ``model``, ``vendor_version``, ``user_prompts``, ``compaction_points``,
+    ``used_plan_mode``, and ``spawned`` (a list of ``{agent_id, description}``
+    for subagents launched from this transcript).
     """
     meta: dict = {
         "ai_title": "",
@@ -532,6 +532,11 @@ def parse_transcript(
         # any message containing one is useless for calibrating characters per
         # token, because part of what was billed is invisible.
         "thinking_messages": set(),
+        # Did the user ever switch this transcript into plan mode. The
+        # ``permissionMode == "plan"`` shape is carried over from a prior
+        # prototype (``Local_app/split_advisor.py:used_plan_mode``) rather than
+        # independently re-verified against a fresh transcript here.
+        "used_plan_mode": False,
     }
 
     # Pass 1: collect tool results and the ai-title, both of which are needed
@@ -568,6 +573,11 @@ def parse_transcript(
 
     for line in _read_jsonl(path):
         line_type = line.get("type")
+        # Observed before the skip below, since ``permission-mode`` carries no
+        # conversational content and never becomes an Event, but whether plan
+        # mode was ever entered still needs to survive onto the Session.
+        if line_type == "permission-mode" and line.get("permissionMode") == "plan":
+            meta["used_plan_mode"] = True
         if line_type in SKIP_TYPES:
             continue
 
@@ -726,6 +736,7 @@ def load_session(project_slug: str, path: Path, with_subagents: bool = True) -> 
 
     orphaned_tokens = meta["orphaned_tokens"]
     thinking_messages = set(meta["thinking_messages"])
+    used_plan_mode = meta["used_plan_mode"]
 
     subagent_ids: list[str] = []
     if with_subagents:
@@ -740,6 +751,9 @@ def load_session(project_slug: str, path: Path, with_subagents: bool = True) -> 
             events.extend(sub_events)
             orphaned_tokens = orphaned_tokens + sub_meta["orphaned_tokens"]
             thinking_messages |= sub_meta["thinking_messages"]
+            # Plan mode is a main-thread concept in practice, but a stray
+            # ``permission-mode`` line in a subagent file should not be lost.
+            used_plan_mode = used_plan_mode or sub_meta["used_plan_mode"]
             if not meta["model"] and sub_meta["model"]:
                 meta["model"] = sub_meta["model"]
             described.setdefault(agent_id, "")
@@ -765,6 +779,7 @@ def load_session(project_slug: str, path: Path, with_subagents: bool = True) -> 
         subagent_ids=subagent_ids,
         orphaned_tokens=orphaned_tokens,
         thinking_message_ids=thinking_messages,
+        used_plan_mode=used_plan_mode,
     )
     return session
 

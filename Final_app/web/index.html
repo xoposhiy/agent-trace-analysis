@@ -27,14 +27,6 @@
           <select id="f-project"><option value="">All projects</option></select>
         </div>
 
-        <div class="field">
-          <label for="f-severity">Problem severity</label>
-          <select id="f-severity" disabled title="Problem detection is not implemented yet">
-            <option value="any">Any</option>
-          </select>
-        </div>
-        <span class="soon">severity filter arrives with problem detection</span>
-
         <span class="spacer"></span>
 
       </div>
@@ -46,10 +38,19 @@
 
     <section class="panel" id="panel-problems" role="tabpanel"
              aria-labelledby="tab-problems" hidden>
-      <div class="empty-state">
-        <strong>Problems</strong><br>
-        Not implemented yet — detectors and the severity filter land in a later step.
+      <div class="filters">
+        <div class="field">
+          <label for="f-problem-sort">Sort by</label>
+          <select id="f-problem-sort">
+            <option value="percent">Percentage saved (highest first)</option>
+            <option value="dollar">Money saved (highest first)</option>
+          </select>
+        </div>
+        <span class="spacer"></span>
       </div>
+
+      <div id="problems"></div>
+      <div id="problems-more" class="more"></div>
     </section>
   </div>
 

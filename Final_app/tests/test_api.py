@@ -7,17 +7,26 @@ on routing, attribution and caching only.
 
 from __future__ import annotations
 
+import json
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from Final_app.adapters import claude_code
-from Final_app.analysis import classify
+from Final_app.analysis import classify, task_forest
 from Final_app.api import app as api
 
-from .conftest import PROJECT_SLUG, user_line, write_transcript
+from .conftest import (
+    PROJECT_SLUG,
+    assistant_tool_line,
+    tool_result_line,
+    user_line,
+    write_transcript,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -162,7 +171,9 @@ def test_unknown_project_yields_an_empty_list_not_an_error(
 def test_severity_filter_narrows_the_returned_rows(client: TestClient,
                                                    claude_home: Path,
                                                    simple_session: Path):
-    """Every session reports ``none`` until problem detection lands.
+    """Every listed row reports ``none`` here, since the list never runs a
+    detector — only ``session_detail()`` does, once a session's own page is
+    opened (see ``test_session_detail_reports_a_detected_problem`` below).
 
     Asserted on the rows, not on ``total``: since paging parses only the page
     it returns, ``total`` counts candidate transcripts on disk and cannot
@@ -307,6 +318,136 @@ def test_the_detail_route_parses_only_its_own_session(
     client.get("/api/sessions/s007")
 
     assert parsed == ["s007"]
+
+
+def _front_loaded_reading_session(claude_home: Path) -> Path:
+    """Six real-cache-read reads followed by ten edits — a missed plan-mode
+    opportunity (see ``analysis/plan_mode.py`` and its own tests for why ten
+    edits, not one)."""
+    lines = [user_line("u1", "Fix the bug", "2026-08-01T10:00:00.000Z")]
+    for i in range(6):
+        when = f"2026-08-01T10:00:{i + 1:02d}.000Z"
+        lines.append(assistant_tool_line(
+            f"a{i}", f"msg{i}", f"t{i}", "Read", {"file_path": f"/repo/f{i}.py"},
+            when, cache_read=2_000_000,
+        ))
+        lines.append(tool_result_line(f"r{i}", f"t{i}", "contents", when))
+    for i in range(10):
+        when = f"2026-08-01T10:00:{i + 7:02d}.000Z"
+        lines.append(assistant_tool_line(
+            f"ae{i}", f"msg-edit{i}", f"te{i}", "Edit", {"file_path": "/repo/f0.py"}, when,
+        ))
+        lines.append(tool_result_line(f"re{i}", f"te{i}", "ok", when))
+    return write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", lines)
+
+
+def test_session_detail_reports_a_detected_problem(client: TestClient, claude_home: Path):
+    _front_loaded_reading_session(claude_home)
+
+    data = client.get("/api/sessions/s").json()
+
+    assert [p["id"] for p in data["problems"]] == ["plan-mode"]
+    assert data["max_severity"] == "medium"
+
+
+def test_session_detail_reports_no_problems_for_a_clean_session(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    data = client.get(f"/api/sessions/{simple_session.stem}").json()
+
+    assert data["problems"] == []
+    assert data["max_severity"] == "none"
+
+
+def test_problems_endpoint_finds_a_problem_without_the_detail_page_being_opened_first(
+    client: TestClient, claude_home: Path
+):
+    """Unlike ``/api/sessions``, this endpoint runs detection itself."""
+    _front_loaded_reading_session(claude_home)
+
+    data = client.get("/api/problems").json()
+
+    assert len(data["problems"]) == 1
+    row = data["problems"][0]
+    assert row["session_id"] == "s"
+    assert row["problem"]["id"] == "plan-mode"
+    # The session's own summary fields ride along, so a row is self-contained
+    # (no second request needed to know whose session this is or how big it was).
+    assert row["title"] == ""  # this fixture never sets an ai-title line
+    assert row["tokens"]["total"] > 0
+    assert row["tool_call_count"] == 16
+    assert row["subagent_count"] == 0
+
+
+def test_problems_endpoint_is_empty_for_a_clean_session(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    data = client.get("/api/problems").json()
+
+    assert data["problems"] == []
+    assert data["has_more"] is False
+    assert data["total_sessions"] == 1
+
+
+def _two_task_session(claude_home: Path) -> Path:
+    """Four prompts, two unrelated goals — a candidate for the task-switch
+    detector (see ``test_task_forest.py`` for the exact pricing shape)."""
+    lines = []
+    prompts = ["Fix the login bug", "Add a test for it",
+              "Now optimize the slow query", "Add an index too"]
+    second = 0
+    for prompt in prompts:
+        lines.append(user_line(f"u{second}", prompt, f"2026-08-01T10:00:{second:02d}.000Z"))
+        second += 10
+        for _ in range(5):
+            when = f"2026-08-01T10:00:{second:02d}.000Z"
+            lines.append(assistant_tool_line(
+                f"a{second}", f"msg{second}", f"t{second}", "Edit",
+                {"file_path": "/repo/f.py"}, when, cache_read=500_000,
+            ))
+            second += 1
+    return write_transcript(claude_home / PROJECT_SLUG / "two-task.jsonl", lines)
+
+
+def _install_fake_forest_judge(monkeypatch: pytest.MonkeyPatch):
+    """Force the task-forest judge on and answer with a fixed two-task forest,
+    so this one test never reaches the real LLM (``clean_api`` forces it off
+    for every other test in this file)."""
+    monkeypatch.setattr(classify, "llm_available", lambda: True)
+
+    class _Completions:
+        def create(self, **kwargs):
+            content = json.dumps({
+                "tasks": [{"id": "T1", "label": "Fix login bug"},
+                         {"id": "T2", "label": "Optimize query"}],
+                "assignments": ["T1", "T1", "T2", "T2"],
+                "summary": "Fixed login and optimized queries",
+            })
+            message = types.SimpleNamespace(content=content)
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+
+    class _OpenAI:
+        def __init__(self, **kwargs):
+            self.chat = types.SimpleNamespace(completions=_Completions())
+
+    module = types.ModuleType("openai")
+    module.OpenAI = _OpenAI
+    monkeypatch.setitem(sys.modules, "openai", module)
+
+
+def test_task_switch_problem_round_trips_through_the_api(
+    client: TestClient, claude_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setattr(task_forest, "_CACHE_FILE", tmp_path / "task_forest.json")
+    monkeypatch.setattr(task_forest, "_cache", None)
+    _install_fake_forest_judge(monkeypatch)
+    _two_task_session(claude_home)
+
+    data = client.get("/api/sessions/two-task").json()
+
+    problem = next(p for p in data["problems"] if p["id"] == "task-switch")
+    assert [t["id"] for t in problem["data"]["tasks"]] == ["T1", "T2"]
+    assert data["max_severity"] in ("medium", "high")
 
 
 def test_pages_version_their_asset_urls(client: TestClient, claude_home: Path):
@@ -540,6 +681,7 @@ def test_a_deleted_session_is_evicted_from_the_cache(
 
 @pytest.mark.parametrize("path", ["/", "/session/anything", "/static/app.js",
                                   "/session/anything/block/0",
+                                  "/session/anything/problem/plan-mode",
                                   "/session/anything/agent/abc",
                                   "/session/anything/agent/abc/block/0"])
 def test_pages_are_served(client: TestClient, claude_home: Path, path: str):

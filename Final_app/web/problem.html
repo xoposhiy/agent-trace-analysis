@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Session · TraceLens</title>
+  <title>Problem · TraceLens</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="wrap">
-    <a class="back" href="/">← all sessions</a>
+    <a class="back" id="back" href="/">← back to the session</a>
 
     <div class="detail-head">
       <h2 id="title">Loading…</h2>
@@ -17,26 +17,19 @@
 
     <div class="stats" id="stats"></div>
 
-    <div class="filters">
-      <div class="field">
-        <label for="f-metric">Y axis</label>
-        <select id="f-metric">
-          <option value="cost">retrospective cost</option>
-          <option value="time">time</option>
-          <option value="messages">messages</option>
-        </select>
-      </div>
-      <span class="spacer"></span>
-      <span class="soon" id="block-count"></span>
-    </div>
-
-    <div class="stage">
+    <div class="problem-stage">
       <div class="bar-col">
-        <div id="bar"></div>
+        <div class="bar-row">
+          <div id="bar"></div>
+          <div id="bar-arrow" class="bar-arrow" hidden>→</div>
+          <div id="plan-mode-bar"></div>
+          <div id="task-forest-bar"></div>
+        </div>
       </div>
       <div>
         <div id="tip" class="tip tip-empty">Hover a block</div>
-        <div id="session-problems"></div>
+        <p id="detail" class="row-detail"></p>
+        <p id="justification" class="row-justification"></p>
       </div>
     </div>
 
@@ -45,6 +38,8 @@
 
   <script src="/static/common.js"></script>
   <script src="/static/bar.js"></script>
-  <script src="/static/session.js"></script>
+  <script src="/static/plan_mode.js"></script>
+  <script src="/static/task_forest.js"></script>
+  <script src="/static/problem.js"></script>
 </body>
 </html>

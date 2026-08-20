@@ -19,6 +19,7 @@ from .conftest import (
     PROJECT_SLUG,
     assistant_text_line,
     assistant_tool_line,
+    permission_mode_line,
     tool_result_line,
     user_line,
     write_transcript,
@@ -284,6 +285,58 @@ def test_lines_without_a_timestamp_are_skipped(claude_home: Path):
     session = claude_code.load_session(PROJECT_SLUG, path)
 
     assert session.user_prompts == ["kept"]
+
+
+def test_a_plan_permission_mode_line_sets_used_plan_mode(claude_home: Path):
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "hi", "2026-08-01T10:00:00.000Z"),
+        permission_mode_line("plan", "2026-08-01T10:00:01.000Z"),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert session.used_plan_mode is True
+
+
+def test_a_session_without_a_permission_mode_line_defaults_to_false(
+    claude_home: Path, simple_session: Path
+):
+    session = claude_code.load_session(PROJECT_SLUG, simple_session)
+
+    assert session.used_plan_mode is False
+
+
+def test_a_different_permission_mode_does_not_set_used_plan_mode(claude_home: Path):
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "hi", "2026-08-01T10:00:00.000Z"),
+        permission_mode_line("default", "2026-08-01T10:00:01.000Z"),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert session.used_plan_mode is False
+
+
+def test_a_permission_mode_line_missing_its_mode_does_not_crash_loading(
+    claude_home: Path
+):
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "hi", "2026-08-01T10:00:00.000Z"),
+        permission_mode_line(None, "2026-08-01T10:00:01.000Z"),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert session is not None
+    assert session.used_plan_mode is False
+
+
+def test_permission_mode_line_never_becomes_an_event(claude_home: Path):
+    """It carries no conversational content — it is metadata, not a block."""
+    path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
+        user_line("u1", "hi", "2026-08-01T10:00:00.000Z"),
+        permission_mode_line("plan", "2026-08-01T10:00:01.000Z"),
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+
+    assert len(session.events) == 1
 
 
 def test_load_all_sessions_orders_newest_first(claude_home: Path):

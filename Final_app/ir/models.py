@@ -411,12 +411,20 @@ class Problem:
     severity: str = "info"  # info | low | medium | high
     detail: str = ""
 
+    # Generic payload for whatever this detector needs the frontend to have —
+    # a priced saving, an anchor event uuid, a flag. Kept untyped rather than
+    # growing a bespoke dataclass field per detector, since every detector type
+    # sketched for this panel (plan-mode, task-switch, sub-agent, no-closed-
+    # loop) needs a different shape here.
+    data: dict = field(default_factory=dict)
+
     def as_dict(self) -> dict:
         return {
             "id": self.id,
             "title": self.title,
             "severity": self.severity,
             "detail": self.detail,
+            "data": self.data,
         }
 
 
@@ -447,6 +455,10 @@ class Session:
 
     user_prompts: list[str] = field(default_factory=list)
     subagent_ids: list[str] = field(default_factory=list)
+
+    # Whether the user ever switched this session into Claude Code's plan
+    # mode (any thread — main or subagent). See ``adapters.claude_code``.
+    used_plan_mode: bool = False
 
     # Usage from assistant messages that produced no Event — in practice, ones
     # whose content was entirely ``thinking``, which the IR drops. Held here so
@@ -542,5 +554,6 @@ class Session:
             "problems": [p.as_dict() for p in self.problems],
             "compaction_points": [t.isoformat() for t in self.compaction_points],
             "subagent_ids": self.subagent_ids,
+            "used_plan_mode": self.used_plan_mode,
         })
         return d

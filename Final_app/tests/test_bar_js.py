@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-SUITES = ["bar.test.js", "common.test.js"]
+SUITES = ["bar.test.js", "common.test.js", "plan_mode.test.js", "task_forest.test.js"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None,

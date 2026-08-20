@@ -29,6 +29,20 @@ def ai_title_line(title: str, session_id: str = SESSION_ID) -> dict:
     return {"type": "ai-title", "aiTitle": title, "sessionId": session_id}
 
 
+def permission_mode_line(mode: str | None, timestamp: str) -> dict:
+    """The line Claude Code writes when the permission mode changes.
+
+    Carries no conversational content — it stays in ``SKIP_TYPES`` and never
+    becomes an Event — but ``mode == "plan"`` is what ``Session.used_plan_mode``
+    is set from. ``mode=None`` produces a line missing ``permissionMode``
+    entirely, for the malformed-line degradation test.
+    """
+    line: dict = {"type": "permission-mode", "timestamp": timestamp}
+    if mode is not None:
+        line["permissionMode"] = mode
+    return line
+
+
 def user_line(uuid: str, text: str, timestamp: str, parent_uuid: str | None = None,
               is_meta: bool = False, prompt_source: str = "typed") -> dict:
     """A user-role line.

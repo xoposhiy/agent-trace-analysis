@@ -167,11 +167,44 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
   font-variant-numeric: tabular-nums;
 }
 
+/* A problem row's own session title, inside its .row-meta line — brighter
+   than the surrounding muted stats so the session it belongs to still
+   reads clearly next to them. */
+.row-session-title { color: var(--text); font-weight: 550; }
+
 .sid {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   opacity: 0.7;
 }
+
+/* The problem-list row's own detail sentence, under its title/meta line —
+   same slot .row-meta occupies on a session row, but this is prose rather
+   than a run of stat pills, so it gets its own class and line-height. This
+   IS the answer to "why was this suggested", so it is sized to be read, not
+   glanced past the way a metadata line is. */
+.row-detail { color: var(--text); font-size: 14.5px; line-height: 1.5; margin-top: 10px; }
+
+/* The LLM-written one-sentence justification (see `analysis.plan_mode.justify`)
+   — present only when the judge was reachable. The most load-bearing text in
+   the row (the actual *reason*, grounded in what was read), so it gets full
+   text colour and an accent rule rather than reading as a muted aside. Empty
+   and margin-less when there is none, so it never leaves a visible gap. */
+.row-justification {
+  color: var(--text);
+  font-size: 14.5px;
+  font-style: italic;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--accent);
+}
+.row-justification:empty { margin: 0; padding: 0; border: 0; }
+
+.pill-severity-high { background: rgba(214, 69, 69, 0.16); color: #ef8080; }
+.pill-severity-medium { background: rgba(229, 148, 0, 0.16); color: #e5a63a; }
+.pill-severity-low { background: rgba(91, 141, 255, 0.14); color: #8fb3ff; }
+.pill-severity-info { background: var(--panel-2); color: var(--muted); }
 
 .pill {
   background: var(--panel-2);
@@ -287,6 +320,17 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
   align-items: start;
 }
 
+/* The problem page's own layout (problem.html): its first column holds two
+   bars side by side (plan-mode's cut bar, ~122px) OR the plain bar plus a
+   task-forest bar whose rail + text labels need real room — sized for the
+   wider case, so plan-mode's page just has slack space. */
+.problem-stage {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
 .placeholder {
   border: 1px dashed var(--line);
   border-radius: 8px;
@@ -311,7 +355,54 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
   scrollbar-width: thin;
 }
 
-#bar svg { display: block; }
+/* The problem page's two bars (see plan_mode.js): the session's own bar,
+   unmodified, beside the same bar with a gap cut into it at the split point —
+   "this bar, cut here" laid out for direct comparison. */
+.bar-row { display: flex; align-items: flex-start; gap: 6px; }
+
+#bar svg, #plan-mode-bar svg { display: block; }
+
+/* Between the two bars — reads as "this session becomes this", pointing from
+   the plain bar to the split one. */
+.bar-arrow {
+  align-self: center;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* --- the task-forest lane (see task_forest.js) ----------------------- */
+
+/* The rail (a plain SVG) and the label column sit side by side, next to the
+   one real `#bar` — this draws no bar of its own. */
+.task-forest-wrap { display: flex; align-items: flex-start; gap: 10px; }
+
+.task-forest-wrap svg { display: block; }
+
+/* Given an explicit width/height in task_forest.js (not implied by its
+   absolutely-positioned children, which contribute nothing to a parent's own
+   box — that omission is what left the whole lane collapsed to zero width
+   before this). */
+.task-forest-labels { position: relative; flex: none; }
+
+.task-forest-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.task-forest-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
 
 /* Hover and keyboard focus get the same treatment — the bar is reachable
    by Tab, so focus must be as visible as hover. */

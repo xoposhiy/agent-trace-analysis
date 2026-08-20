@@ -1,6 +1,9 @@
 // Dashboard: tabs, filters, session list.
 
-const state = { project: '', severity: 'any', llm: null, offset: 0 };
+const state = { project: '', llm: null, offset: 0 };
+// `rows` holds every problem scanned so far, raw — sorting is a pure
+// client-side re-render over what's already loaded, never a re-scan.
+const problemsState = { loaded: false, rows: [], sort: 'percent' };
 
 // Must match PAGE_SIZE in api/app.py — the server clamps anyway, this only
 // keeps the client's offset arithmetic in step with what it asks for.
@@ -17,6 +20,14 @@ function initTabs() {
         other.setAttribute('aria-selected', String(selected));
         document.getElementById(other.getAttribute('aria-controls')).hidden = !selected;
       });
+      // The Problems tab actually runs detection over whatever it scans
+      // (unlike the session list), so it is loaded on first click rather
+      // than on page load — opening the dashboard should not pay that cost
+      // for a tab the user may never open.
+      if (tab.id === 'tab-problems' && !problemsState.loaded) {
+        problemsState.loaded = true;
+        loadProblems();
+      }
     });
   });
 }
@@ -153,7 +164,6 @@ async function loadSessions({ append = false } = {}) {
 
   const params = new URLSearchParams();
   if (state.project) params.set('project', state.project);
-  if (state.severity && state.severity !== 'any') params.set('severity', state.severity);
   params.set('offset', String(state.offset));
   params.set('limit', String(PAGE_SIZE));
 
@@ -208,9 +218,131 @@ function renderMore(data) {
   slot.appendChild(button);
 }
 
+// --- problems -----------------------------------------------------------
+
+const SEVERITY_LABEL = { info: 'info', low: 'low', medium: 'medium', high: 'high' };
+
+function problemRow(row) {
+  const problem = row.problem;
+  const link = el('a', 'row');
+  link.href = `/session/${row.session_id}/problem/${problem.id}`;
+
+  const head = el('div', 'row-head');
+  head.appendChild(el('span', 'row-title', problem.title));
+  head.appendChild(el('span', `pill pill-severity-${problem.severity}`,
+    SEVERITY_LABEL[problem.severity] || problem.severity));
+  link.appendChild(head);
+
+  const meta = el('div', 'row-meta');
+  // The session's own free title (Claude Code's `ai-title` line) is what
+  // makes a session recognisable — a problem alone doesn't say which one.
+  meta.appendChild(el('span', 'row-session-title',
+    row.title || row.session_id.slice(0, 8)));
+  meta.appendChild(el('span', 'pill', row.project_label));
+  const tokens = el('span', null, `${formatNumber(row.tokens.total)} tokens`);
+  tokens.title = `${row.tokens.working.toLocaleString()} excluding cache reads`
+    + ` · ${row.tokens.cache_read.toLocaleString()} re-read from cache`;
+  meta.appendChild(tokens);
+  meta.appendChild(el('span', null, `${row.tool_call_count} tool calls`));
+  meta.appendChild(el('span', null, formatDuration(row.duration_s)));
+  if (row.subagent_count) {
+    meta.appendChild(el('span', null,
+      `${row.subagent_count} subagent${row.subagent_count > 1 ? 's' : ''}`));
+  }
+  link.appendChild(meta);
+
+  link.appendChild(el('div', 'row-detail', problem.detail));
+  // LLM-optional: present only when the judge was reachable (see
+  // `analysis.plan_mode.justify`) — absent, the mechanism sentence above
+  // still stands on its own.
+  if (problem.data && problem.data.justification) {
+    link.appendChild(el('div', 'row-justification', `“${problem.data.justification}”`));
+  }
+
+  return link;
+}
+
+// The value a row sorts by. Both current problem types (`plan-mode`,
+// `task-switch`) price their saving the same way (`price_split`/
+// `price_multi_split` share the `dollar_saving`/`percent_saving` keys), so
+// this works unchanged for either; a future problem type with no priced
+// saving just sorts as 0 rather than crashing the comparator.
+function problemSortValue(row) {
+  const data = row.problem.data || {};
+  return problemsState.sort === 'dollar' ? (data.dollar_saving || 0) : (data.percent_saving || 0);
+}
+
+// Re-renders from `problemsState.rows` — never re-fetches. Sorting is
+// always highest-first; there is no ascending option, per how this was
+// asked for.
+function renderProblemsList() {
+  if (!problemsState.rows.length) return;
+  const sorted = [...problemsState.rows].sort((a, b) => problemSortValue(b) - problemSortValue(a));
+  const list = el('div', 'list');
+  sorted.forEach((row) => list.appendChild(problemRow(row)));
+  document.getElementById('problems').replaceChildren(list);
+}
+
+function initProblemsSort() {
+  const select = document.getElementById('f-problem-sort');
+  select.addEventListener('change', () => {
+    problemsState.sort = select.value;
+    renderProblemsList();
+  });
+}
+
+// Unlike `loadSessions`, this does NOT stop after one page: `/api/problems`
+// pages over SESSIONS scanned, not problems found, so a page landing on a
+// clean stretch of sessions can come back with zero rows while later pages
+// still hold the one flagged session. Stopping there — as this used to —
+// read as "scanned, found nothing" when the truth was "scanned page 1 of 3
+// and hasn't looked at the rest yet", and only clicking "load more" (an
+// unexplained extra step) actually found it. So this keeps asking for the
+// next page itself, updating the status line as it goes, until the backend
+// says there is nothing left to scan.
+async function loadProblems() {
+  const container = document.getElementById('problems');
+  const status = document.getElementById('problems-more');
+  container.replaceChildren(el('div', 'empty-state', 'Scanning sessions…'));
+  status.replaceChildren();
+  problemsState.rows = [];
+
+  let offset = 0;
+  let data;
+
+  try {
+    do {
+      const params = new URLSearchParams();
+      if (state.project) params.set('project', state.project);
+      params.set('offset', String(offset));
+      params.set('limit', String(PAGE_SIZE));
+
+      data = await getJSON(`/api/problems?${params}`);
+      problemsState.rows.push(...data.problems);
+      renderProblemsList();
+
+      offset = data.offset + data.limit;
+      status.replaceChildren(el('div', 'more-count',
+        `scanned ${Math.min(offset, data.total_sessions)} of ${data.total_sessions} sessions`
+        + (data.has_more ? '…' : '')));
+    } while (data.has_more);
+  } catch (error) {
+    status.replaceChildren();
+    if (!problemsState.rows.length) {
+      container.replaceChildren(el('div', 'error', `Failed to scan sessions: ${error.message}`));
+    }
+    return;
+  }
+
+  if (!problemsState.rows.length) {
+    container.replaceChildren(el('div', 'empty-state', 'No problems detected.'));
+  }
+}
+
 // --- boot -------------------------------------------------------------
 
 initTabs();
+initProblemsSort();
 loadHealth();
 loadProjects();
 loadSessions();

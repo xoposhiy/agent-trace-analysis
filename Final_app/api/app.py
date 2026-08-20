@@ -11,11 +11,13 @@ Endpoints
     GET  /api/llm-check           live probe: does the LLM actually answer?
     GET  /api/projects            project slugs + session counts, for the filter
     GET  /api/sessions            session list, newest first
+    GET  /api/problems            detected problems, newest-session-first
     GET  /api/sessions/{id}       one full session
     GET  /api/sessions/{id}/blocks/{n}   one block's steps, for its page
     GET  /api/sessions/{id}/agents/{aid} one subagent's own blocks
     GET  /api/sessions/{id}/agents/{aid}/blocks/{n}   one of those blocks
     GET  /session/{id}/block/{n}         that block's page
+    GET  /session/{id}/problem/{pid}     one detected problem's own page
     GET  /session/{id}/agent/{aid}       one subagent's own bar
     GET  /session/{id}/agent/{aid}/block/{n}
 """
@@ -34,6 +36,7 @@ from fastapi.staticfiles import StaticFiles
 from Final_app.adapters import claude_code
 from Final_app.analysis.attribution import attribute
 from Final_app.analysis.blocks import KIND_LABELS, build_blocks
+from Final_app.analysis.problems import detect_problems
 from Final_app.analysis.steps import block_steps, step_summary
 from Final_app.config import llm_diagnostics, probe_llm
 from Final_app.ir.models import Block, Session
@@ -209,11 +212,14 @@ def sessions(
     on disk, so the client knows there is more without anything being parsed to
     find out.
 
-    ``severity`` is accepted and threaded through now so the UI filter is real,
-    but every session currently reports ``none`` — problem detection lands in a
-    later step. It is applied *within* the page rather than before it, since
-    filtering across all sessions would mean parsing all of them, which is the
-    cost this endpoint exists to avoid.
+    ``severity`` is accepted and threaded through now, but this endpoint never
+    builds blocks or runs a detector — every session it returns reports
+    ``none`` unless its detail page has already been opened this server run
+    (see ``session_detail``, which is where detection actually happens). The
+    Problems tab gets its real answer from ``/api/problems`` instead, which
+    does run detection. It is applied *within* the page rather than before it,
+    since filtering across all sessions would mean parsing all of them, which
+    is the cost this endpoint exists to avoid.
     """
     candidates = _candidates(project)
     items = _load_page(candidates, offset, limit)
@@ -238,6 +244,55 @@ def sessions(
     }
 
 
+@app.get("/api/problems")
+def problems(
+    project: Optional[str] = Query(None, description="project slug; omit for all"),
+    offset: int = Query(0, ge=0, description="sessions to skip, for 'load more'"),
+    limit: int = Query(PAGE_SIZE, ge=1, le=200, description="sessions to scan"),
+) -> dict:
+    """One page of detected problems, scanning sessions newest-first.
+
+    Unlike ``/api/sessions``, this always builds each scanned session's blocks
+    and runs its detectors — there is no problem list to page over without
+    doing that work, and this is the endpoint that actually does it (the
+    Problems tab's real source of truth; ``/api/sessions``' own severity
+    filter is only ever as fresh as whichever sessions this — or a detail
+    page — has already scanned).
+
+    ``limit``/``offset`` page over SESSIONS scanned, not problems found, so a
+    stretch of clean sessions can come back as a short or empty page with
+    ``has_more`` still true — the client should keep clicking "load more"
+    rather than reading a short page as the end of the list.
+    """
+    candidates = _candidates(project)
+    sessions_scanned = _load_page(candidates, offset, limit)
+
+    rows = []
+    for session in sessions_scanned:
+        if not session.blocks:
+            session.blocks = build_blocks(session)
+        if not session.problems:
+            session.problems = detect_problems(session)
+        # The same summary shape `/api/sessions` rows use (title, tokens,
+        # tool_call_count, duration_s, subagent_count, ...), so a problem row
+        # can show the session it belongs to without a second request.
+        summary = session.summary_dict()
+        for problem in session.problems:
+            rows.append(dict(
+                summary,
+                project_label=claude_code.unslug_project(session.project),
+                problem=problem.as_dict(),
+            ))
+
+    return {
+        "problems": rows,
+        "total_sessions": len(candidates),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + limit < len(candidates),
+    }
+
+
 @app.get("/api/sessions/{session_id}")
 def session_detail(session_id: str) -> dict:
     """One session, with its bar blocks built.
@@ -248,6 +303,10 @@ def session_detail(session_id: str) -> dict:
     session = _find(session_id)
     if not session.blocks:
         session.blocks = build_blocks(session)
+    if not session.problems:
+        # Detectors reason about blocks, so this runs after they're built.
+        # Guarded like blocks: a cached Session only runs detection once.
+        session.problems = detect_problems(session)
     data = session.as_dict()
     data["project_label"] = claude_code.unslug_project(session.project)
     data["kind_labels"] = KIND_LABELS
@@ -471,6 +530,17 @@ def session_page(session_id: str) -> HTMLResponse:
 def block_page(session_id: str, index: int) -> HTMLResponse:
     # Opened in its own tab from the bar, so the session stays put behind it.
     return _page("block.html")
+
+
+@app.get("/session/{session_id}/problem/{problem_id}")
+def problem_page(session_id: str, problem_id: str) -> HTMLResponse:
+    """One detected problem's own page — the Problems tab's link target.
+
+    Draws the session's plain bar beside the same bar with that problem's
+    split cut into it (see ``web/plan_mode.js``); ``session.html`` itself
+    shows only the plain bar, so this is the one place that comparison lives.
+    """
+    return _page("problem.html")
 
 
 @app.get("/session/{session_id}/agent/{agent_id}")

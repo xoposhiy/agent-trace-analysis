@@ -160,3 +160,13 @@ def test_summary_dict_omits_events_and_blocks():
     assert "events" not in payload
     assert "blocks" not in payload
     assert payload["message_count"] == 50
+
+
+def test_problem_data_defaults_to_an_empty_dict():
+    assert Problem(id="a", title="A").data == {}
+
+
+def test_problem_as_dict_includes_its_data_payload():
+    problem = Problem(id="a", title="A", data={"dollar_saving": 1.5})
+
+    assert problem.as_dict()["data"] == {"dollar_saving": 1.5}
