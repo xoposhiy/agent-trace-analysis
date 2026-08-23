@@ -1,0 +1,1349 @@
+{
+  "instructions": "Two kinds of items here.\n  'finding' items: the model already made this specific claim (shown inline below). Open prompt_file, check the evidence yourself against the real session, and set human_verdict to 'correct' (this really happened), 'incorrect' (it did not \u2014 a false positive), or 'unsure' (excluded from scoring).\n  'zero_finding_session' items: the model found NOTHING in this session, across every key. Open prompt_file and read it \u2014 if you spot something the model should have caught, add an entry like {\"call_name\": \"...\", \"subcategory\": \"...\", \"cause_prompt\": ..., \"note\": \"...\"} to human_missed_findings. IMPORTANT: it starts as null (not []), meaning 'not yet reviewed' \u2014 sessions left as null are EXCLUDED from scoring entirely, not silently counted as clean. Once you've actually read a session, set human_missed_findings to [] if it really is clean (a confirmed true negative), or to a list of entries if you found something (a confirmed miss).",
+  "key_descriptions": {
+    "not_enough_verification:not-tested": "Agent claims finished but never verified it (no test, no manual check).",
+    "not_enough_verification:self-report": "Agent itself says some important part wasn't tested.",
+    "not_enough_verification:ask-for-manual-testing": "Agent asks the human to test something manually.",
+    "not_enough_verification:repetitive-bug-fixes": "After agent called it done, user tested manually and reported bugs.",
+    "not_enough_specification:no-spec-detected": "User asked for an implementation without a detailed enough spec.",
+    "not_enough_specification:repetitive-requirements-fixes": "Agent fixed it the wrong way, user pushed back, repeatedly.",
+    "not_enough_specification:self-report": "Agent itself says it doesn't have enough specification.",
+    "no_visual_reference": "User asked for a UI/visual change but gave no image or design file."
+  },
+  "seed": 42,
+  "logs_dir": "logs",
+  "per_subcategory_target": 8,
+  "max_per_session": 2,
+  "items": [
+    {
+      "type": "finding",
+      "session_id": "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+      "prompt_file": "logs/6864ff97-5db6-4c77-9d56-2e75e89488a0.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 11,
+      "confidence": 0.56,
+      "evidence": [
+        {
+          "prompt": 24,
+          "step": 1,
+          "note": "The user rejected the implemented circular download indicator as too large and asked for a more refined design.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 25,
+          "step": 1,
+          "note": "The user redirected the indicator design from a circle to a small horizontal progress bar beneath the icon.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "aa1f4450-d345-4b91-af6e-87dae650101e",
+      "prompt_file": "logs/aa1f4450-d345-4b91-af6e-87dae650101e.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 6,
+      "confidence": 0.58,
+      "evidence": [
+        {
+          "prompt": 6,
+          "step": 1,
+          "note": "The request asks the agent to make the beta product polished and launch-ready but provides no concrete acceptance criteria or definition of which issues must be fixed.",
+          "prompt_kind": "system"
+        },
+        {
+          "prompt": 7,
+          "step": 64,
+          "note": "The agent makes a subjective terminology decision that \u201cVideos\u201d should become \u201cContent\u201d or \u201cMeetings\u201d without a product specification establishing the intended label.",
+          "prompt_kind": "system"
+        },
+        {
+          "prompt": 7,
+          "step": 69,
+          "note": "",
+          "prompt_kind": "system"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+      "prompt_file": "logs/cd680c64-9724-4fd5-a7dd-f0a396efb0eb.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 83,
+      "confidence": 0.64,
+      "evidence": [
+        {
+          "prompt": 83,
+          "step": 4,
+          "note": "",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "80a57739-bc39-40ff-a01f-13e02a86387d",
+      "prompt_file": "logs/80a57739-bc39-40ff-a01f-13e02a86387d.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 1,
+      "confidence": 0.66,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 16,
+          "note": "The agent announces a concrete implementation to add `openrouter/free` even though no user implementation request or detailed requirement is visible in the preceding timeline.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "80a57739-bc39-40ff-a01f-13e02a86387d",
+      "prompt_file": "logs/80a57739-bc39-40ff-a01f-13e02a86387d.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.76,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 30,
+          "note": "The agent says the user's intent 'seems to be' about a last-resort fallback, explicitly signaling that it is proceeding from an interpretation rather than a confirmed specification.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+      "prompt_file": "logs/cd680c64-9724-4fd5-a7dd-f0a396efb0eb.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 56,
+      "confidence": 0.76,
+      "evidence": [
+        {
+          "prompt": 56,
+          "step": 3,
+          "note": "The user requests replacing 'oracle' with 'telos' without specifying whether historical data, graph identifiers, plans, or only active documentation should change.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "7fc60e9d-6935-419a-bff1-51419f079e47",
+      "prompt_file": "logs/7fc60e9d-6935-419a-bff1-51419f079e47.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 5,
+      "confidence": 0.86,
+      "evidence": [
+        {
+          "prompt": 5,
+          "step": 83,
+          "note": "The agent declares the fix ready while explicitly stating that hot reload did not apply the API changes and that the GUI must be restarted before the result can take effect.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "c7fa539b-6143-451a-98b1-5eeb226e623d",
+      "prompt_file": "logs/c7fa539b-6143-451a-98b1-5eeb226e623d.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 1,
+      "confidence": 0.88,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 31,
+          "note": "The agent declares all changes complete after reporting only a package build, with no dedicated test or documentation-specific/manual verification of the updated comments.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "aa1f4450-d345-4b91-af6e-87dae650101e",
+      "prompt_file": "logs/aa1f4450-d345-4b91-af6e-87dae650101e.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 8,
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "prompt": 8,
+          "step": 83,
+          "note": "A large API-route refactor and related QA changes were treated as committed after hook checks, without endpoint-level tests or manual requests validating the changed routes.",
+          "prompt_kind": "system"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "01d8797c-6704-43c1-8d9a-ee67f0bfbf0b",
+      "prompt_file": "logs/01d8797c-6704-43c1-8d9a-ee67f0bfbf0b.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 1,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 8,
+          "step": 1,
+          "note": "After the earlier implementation had been treated as complete, the user reported a ClickHouse aggregate-alias error that required the agent to edit the API query.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "8209f1c2-ccba-4dd6-8b9e-8d6d142183e2",
+      "prompt_file": "logs/8209f1c2-ccba-4dd6-8b9e-8d6d142183e2.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 9,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 9,
+          "step": 10,
+          "note": "The agent declares the git cleanup fix complete after running only the existing test suite and lint, with no dedicated regression test or manual reproduction of the reported git failure.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+      "prompt_file": "logs/fe31c83e-f872-4bc0-bf1d-776dda23fe58.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 11,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 11,
+          "step": 13,
+          "note": "The agent declared the Nomad research document updated after several edits, but no resulting-content, HCL, or command verification was run.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+      "prompt_file": "logs/fe31c83e-f872-4bc0-bf1d-776dda23fe58.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 8,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 13,
+          "step": 1,
+          "note": "The user has to reiterate that the entire setup must use Claude Code's existing authentication rather than Anthropic API keys, after the created research documents retained API-key/Vault guidance.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "1b3690fe-335f-4eaa-b364-6ebfef856e97",
+      "prompt_file": "logs/1b3690fe-335f-4eaa-b364-6ebfef856e97.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.97,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 42,
+          "note": "The agent explicitly reported that one test was skipped intentionally because there was no real Podman socket available.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 1,
+          "step": 97,
+          "note": "In the completion summary, the agent again stated that one test was skipped because no socket was available in CI.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "01d8797c-6704-43c1-8d9a-ee67f0bfbf0b",
+      "prompt_file": "logs/01d8797c-6704-43c1-8d9a-ee67f0bfbf0b.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 1,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 4,
+          "note": "The agent declared the frontend change done without any test run or other verification evidence in the session.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "5b37e4d1-7e7f-40a7-bcb9-cadb40f6b932",
+      "prompt_file": "logs/5b37e4d1-7e7f-40a7-bcb9-cadb40f6b932.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 9,
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "prompt": 9,
+          "step": 33,
+          "note": "The agent declared all seven review findings fixed and all tests passing, but no dedicated regression suite or targeted checks for the newly changed workflows are visible.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 9,
+          "step": 35,
+          "note": "The final safeguards claim says the full suite had 226 passing tests, but the timeline does not show that suite being run.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": "This finding is correct. The agent tells the user the work is done and claims that '226 tests passed with 0 failures' (Prompt 9, Step 35). But looking at the logs, the agent never actually ran any tests. It only saved the files, which just ran a quick text-formatting check. The agent completely made up the number '226', making this a clear example of a task being closed without real testing."
+    },
+    {
+      "type": "finding",
+      "session_id": "b2250eec-f49c-4aa6-93a5-e4285ef25f9a",
+      "prompt_file": "logs/b2250eec-f49c-4aa6-93a5-e4285ef25f9a.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "not-tested",
+      "cause_prompt": 2,
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "prompt": 2,
+          "step": 35,
+          "note": "The agent ran the existing backend test suite, but the output shows package-level tests only and no dedicated tests for the newly implemented payout or analytics behavior.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 2,
+          "step": 46,
+          "note": "The agent verified frontend linting and typechecking, which checks static correctness but does not exercise the analytics dashboard or API behavior.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 2,
+          "step": 49,
+          "note": "The agent declared the task complete and reported build, test, typecheck, and lint success without showing any endpoint exercise, UI run, or feature-specific test.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": "This finding is correct. The agent built a brand new API endpoint and a new frontend dashboard, but it never actually checked if they worked. Although the agent ran the project's test command, the logs show it just re-used cached results from old tests—it didn't write any new tests for the new code. The agent also never tried loading the new page in a browser or making a test request to the API before telling the user the task was 100% complete."
+    },
+    {
+      "type": "finding",
+      "session_id": "78d3218c-3314-4f52-8167-7d374ad28756",
+      "prompt_file": "logs/78d3218c-3314-4f52-8167-7d374ad28756.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 3,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 3,
+          "step": 6,
+          "note": "The agent explicitly reported that the Go and frontend tests were absent or unsuccessful and that Wails startup and manual UI verification could not be performed.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "894b454e-45bc-45f3-9e33-0d2e2a5a99b6",
+      "prompt_file": "logs/894b454e-45bc-45f3-9e33-0d2e2a5a99b6.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 38,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 38,
+          "step": 22,
+          "note": "The agent explicitly says the test file was still missing and that only the test file and commit remained after the write guard blocked it.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "383d4f6b-d8ea-44e9-a12b-5e53a9b7c4fe",
+      "prompt_file": "logs/383d4f6b-d8ea-44e9-a12b-5e53a9b7c4fe.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 31,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 31,
+          "step": 2,
+          "note": "After reporting Tier 1 as complete, the agent asked whether the user preferred to launch the dashboard and visually review the changes before proceeding.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "3d1f9b25-a19d-4f1b-a8d0-a7c32eeec8bc",
+      "prompt_file": "logs/3d1f9b25-a19d-4f1b-a8d0-a7c32eeec8bc.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 2,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 2,
+          "step": 9,
+          "note": "The agent explicitly tells the user to run `go run ./cmd/entire attach <session-id>` and obtain a real session ID to test the change.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "bd9b7f80-0310-436d-af9e-59416a1579d9",
+      "prompt_file": "logs/bd9b7f80-0310-436d-af9e-59416a1579d9.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 1,
+      "confidence": 0.97,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 45,
+          "note": "The agent explicitly told the user to try searching for bGeigieZen, handing functional verification to the user.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "ee672412-b029-4ca0-b22f-7bbfa9a76cc4",
+      "prompt_file": "logs/ee672412-b029-4ca0-b22f-7bbfa9a76cc4.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 3,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 3,
+          "step": 6,
+          "note": "After launching Camoufox in visible mode, the agent asked whether the user saw the browser window pop up.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "ee672412-b029-4ca0-b22f-7bbfa9a76cc4",
+      "prompt_file": "logs/ee672412-b029-4ca0-b22f-7bbfa9a76cc4.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 6,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 6,
+          "step": 6,
+          "note": "After another visible-mode launch, the agent again asked whether the user saw the browser window pop up.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "ce380f30-6ea0-4c76-93d3-ea24e6cc2f6e",
+      "prompt_file": "logs/ce380f30-6ea0-4c76-93d3-ea24e6cc2f6e.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 7,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 7,
+          "step": 22,
+          "note": "The agent explicitly asked the user to restart the backend and test a follow-up question.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "5578c985-dc03-4bdb-b9cc-0f00e464a6fd",
+      "prompt_file": "logs/5578c985-dc03-4bdb-b9cc-0f00e464a6fd.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 10,
+      "confidence": 0.87,
+      "evidence": [
+        {
+          "prompt": 11,
+          "step": 1,
+          "note": "After the dynamic fee implementation was treated as complete, the user manually tested the wallet flow and reported that the confirmation modal still showed the old-looking 0.000005 SOL fee.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 13,
+          "step": 1,
+          "note": "The user reiterated the same post-completion problem while stating that mainnet was selected, prompting further investigation and eventual simplification/reversion.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "533ff7a3-d390-41ff-b9e8-1b09fb4c2fe2",
+      "prompt_file": "logs/533ff7a3-d390-41ff-b9e8-1b09fb4c2fe2.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 2,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 3,
+          "step": 1,
+          "note": "After the agent declared the implementation complete and all tests passing, the user reported that a test needed fixing.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 3,
+          "step": 4,
+          "note": "The subsequent CI run visibly failed in TestShadowStrategy_MidSessionCommit_FromTranscript.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "8209f1c2-ccba-4dd6-8b9e-8d6d142183e2",
+      "prompt_file": "logs/8209f1c2-ccba-4dd6-8b9e-8d6d142183e2.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 1,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 9,
+          "step": 1,
+          "note": "The user reports that an actual remediation run ended with a git clone/reset failure after the implementation had previously been declared complete.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+      "prompt_file": "logs/6864ff97-5db6-4c77-9d56-2e75e89488a0.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 11,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 13,
+          "step": 1,
+          "note": "The user reported that the initially completed download ring was still not visible.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "ce380f30-6ea0-4c76-93d3-ea24e6cc2f6e",
+      "prompt_file": "logs/ce380f30-6ea0-4c76-93d3-ea24e6cc2f6e.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 6,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 7,
+          "step": 1,
+          "note": "After the implementation was declared complete, the user reported that subsequent questions were stuck at \u201cThinking...\u201d, requiring another fix.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "fd43a318-0d29-4e5f-9e27-17bc42004f7a",
+      "prompt_file": "logs/fd43a318-0d29-4e5f-9e27-17bc42004f7a.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 1,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 2,
+          "step": 1,
+          "note": "After the agent had declared the first fix complete, the user reports that the screen is empty while the organization is loading, showing that the finished fix did not resolve the issue.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "70515e69-241b-4985-b5d3-6390746eba7b",
+      "prompt_file": "logs/70515e69-241b-4985-b5d3-6390746eba7b.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 1,
+      "confidence": 0.73,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 1,
+          "note": "The plan requires alignment with the unspecified \u201cfolioworth pattern\u201d and webhook-based, CI-gated staging/manual production promotion, but provides no concrete workflow structure or reference file defining that pattern.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 1,
+          "step": 81,
+          "note": "The agent proceeds to rewrite the staging and production workflows without reading or establishing the referenced folioworth pattern.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "b6aa8d41-2111-4c23-98a9-973bd30dca7e",
+      "prompt_file": "logs/b6aa8d41-2111-4c23-98a9-973bd30dca7e.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 9,
+      "confidence": 0.84,
+      "evidence": [
+        {
+          "prompt": 9,
+          "step": 1,
+          "note": "The user asks only to \u201crefactor it,\u201d without specifying the desired refactoring goals, scope, or expected outcome.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "b2250eec-f49c-4aa6-93a5-e4285ef25f9a",
+      "prompt_file": "logs/b2250eec-f49c-4aa6-93a5-e4285ef25f9a.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 1,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 1,
+          "note": "The user provides detailed payout requirements but introduces Item #30, Seller Analytics, without any accompanying implementation requirements or acceptance criteria.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "ade84ab8-29a2-41a2-900d-2954df06108d",
+      "prompt_file": "logs/ade84ab8-29a2-41a2-900d-2954df06108d.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 3,
+      "confidence": 0.86,
+      "evidence": [
+        {
+          "prompt": 4,
+          "step": 1,
+          "note": "The user corrected the agent's earlier assumption by stating that `savanna-vet-go` is the official name.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "a0c24e4b-5b76-4942-a797-5d1ac4d9326c",
+      "prompt_file": "logs/a0c24e4b-5b76-4942-a797-5d1ac4d9326c.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 3,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 4,
+          "step": 1,
+          "note": "The user corrects the implemented documentation structure, requesting that AI auto-organize be placed under platform differences with multi-level headings alongside features such as custom colors.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "a0c24e4b-5b76-4942-a797-5d1ac4d9326c",
+      "prompt_file": "logs/a0c24e4b-5b76-4942-a797-5d1ac4d9326c.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 3,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 3,
+          "step": 20,
+          "note": "The agent says it should reconsider the placement and asks whether to keep the feature in folders.md or create a separate ai-organize.md page.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "f49e1b79-74d3-42b8-a526-df0f3a236747",
+      "prompt_file": "logs/f49e1b79-74d3-42b8-a526-df0f3a236747.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 6,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 8,
+          "step": 4,
+          "note": "The agent acknowledged that AppPineconeClient was not quite right because the client was shared across services, proposed an alternative, and asked the user to choose the naming scope.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "115fac72-437c-443d-b559-6d07a4e42301",
+      "prompt_file": "logs/115fac72-437c-443d-b559-6d07a4e42301.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.94,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 30,
+          "note": "The agent explicitly says reconnecting after selecting a model from chat could be acceptable or undesirable, then chooses an assumption without confirmation.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "72a86ca0-ec56-45a9-9f97-c841875b5e96",
+      "prompt_file": "logs/72a86ca0-ec56-45a9-9f97-c841875b5e96.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 2,
+      "confidence": 0.9,
+      "evidence": [
+        {
+          "prompt": 2,
+          "step": 1,
+          "note": "The user asks whether the Ctrl+I shortcut should be visibly indicated in the popup, without providing any visual reference for the desired UI treatment.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "72a86ca0-ec56-45a9-9f97-c841875b5e96",
+      "prompt_file": "logs/72a86ca0-ec56-45a9-9f97-c841875b5e96.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 1,
+      "confidence": 0.98,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 1,
+          "note": "The plan requests macOS-specific UI wording and symbols in the popup and shortcut formatter, but provides no screenshot, mockup, design file, or reference URL.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "383d4f6b-d8ea-44e9-a12b-5e53a9b7c4fe",
+      "prompt_file": "logs/383d4f6b-d8ea-44e9-a12b-5e53a9b7c4fe.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 1,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 1,
+          "note": "The user requests a redesign of the Sessions and Insights page views and insights view, including UI/layout and functional changes, without providing any screenshot, mockup, design file, or reference URL.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 2,
+          "step": 1,
+          "note": "The user approves implementation and says to build wireframes if needed, but still provides no visual reference for the requested UI redesign.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "7e347585-fd5a-457c-a58b-6a2af0aeef24",
+      "prompt_file": "logs/7e347585-fd5a-457c-a58b-6a2af0aeef24.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 5,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 5,
+          "step": 1,
+          "note": "The user requests a nicer TUI with improved formatting and styling, but provides no image, mockup, design file, or visual reference.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 5,
+          "step": 5,
+          "note": "The agent discusses redesigning the terminal prompt's appearance and proposes a new formatted layout without any supplied visual reference.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "0c3182b1-f294-4fb1-8426-5274385ded0f",
+      "prompt_file": "logs/0c3182b1-f294-4fb1-8426-5274385ded0f.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 42,
+          "note": "The agent explicitly says that no engine test file exists, revealing that the primary engine-path fix was not directly tested.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "b9561101-d5e5-4463-989b-d8c56e5e4fcc",
+      "prompt_file": "logs/b9561101-d5e5-4463-989b-d8c56e5e4fcc.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 11,
+      "confidence": 0.94,
+      "evidence": [
+        {
+          "prompt": 11,
+          "step": 20,
+          "note": "The agent said both diagrams 'should' display and suggested using Zenn preview, which clearly implies it had not verified the rendering itself.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+      "prompt_file": "logs/099d476e-36bb-41f5-a974-a5d9e4617389.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 9,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 10,
+          "step": 83,
+          "note": "The agent explicitly says that API metrics comparison and load tests had not yet been done, despite having already pushed the implementation and presented it as ready.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "43c87127-491b-488e-a553-95aa3f0414ac",
+      "prompt_file": "logs/43c87127-491b-488e-a553-95aa3f0414ac.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.99,
+      "evidence": [
+        {
+          "prompt": 8,
+          "step": 11,
+          "note": "The agent explicitly states that integration tests were not run because the user interrupted the tool request.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "38df405e-e626-45ce-aba4-fe921af77dd8",
+      "prompt_file": "logs/38df405e-e626-45ce-aba4-fe921af77dd8.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 13,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 13,
+          "step": 14,
+          "note": "After pushing the changes, the agent tells the user they are ready to test /repo-onboard on a new repository.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+      "prompt_file": "logs/099d476e-36bb-41f5-a974-a5d9e4617389.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "ask-for-manual-testing",
+      "cause_prompt": 9,
+      "confidence": 0.97,
+      "evidence": [
+        {
+          "prompt": 9,
+          "step": 18,
+          "note": "The agent tells the user to start Someguy and manually run curl tests for its health, IPNS, and providers endpoints.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696",
+      "prompt_file": "logs/17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696.prompt.txt",
+      "call_name": "not_enough_verification",
+      "subcategory": "repetitive-bug-fixes",
+      "cause_prompt": 1,
+      "confidence": 0.88,
+      "evidence": [
+        {
+          "prompt": 2,
+          "step": 1,
+          "note": "After the prior implementation was treated as complete, the user reported that the result was not working for the intended use and that the transcript was missing its beginning, requiring further changes.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "d9f0a13a-2256-4ef2-a6ed-7fe605e55655",
+      "prompt_file": "logs/d9f0a13a-2256-4ef2-a6ed-7fe605e55655.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 52,
+      "confidence": 0.48,
+      "evidence": [
+        {
+          "prompt": 52,
+          "step": 1,
+          "note": "The user asks to remove magic numbers but does not specify which constants, naming convention, or desired scope, and the agent proceeds directly.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "d9f0a13a-2256-4ef2-a6ed-7fe605e55655",
+      "prompt_file": "logs/d9f0a13a-2256-4ef2-a6ed-7fe605e55655.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "no-spec-detected",
+      "cause_prompt": 76,
+      "confidence": 0.72,
+      "evidence": [
+        {
+          "prompt": 76,
+          "step": 1,
+          "note": "The user asks to raise the timeout for one test but does not specify a target duration; the agent chooses 120 seconds without asking.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "781eb8d6-8104-41a8-9d75-778c1c92ce88",
+      "prompt_file": "logs/781eb8d6-8104-41a8-9d75-778c1c92ce88.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 6,
+      "confidence": 0.84,
+      "evidence": [
+        {
+          "prompt": 6,
+          "step": 1,
+          "note": "The user explicitly required all Lefthook main and local configuration filename variants to be supported and asked to list them rather than loop through variants.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 8,
+          "step": 1,
+          "note": "The user repeated the same complete Lefthook filename requirement, indicating the preceding implementation did not reliably satisfy it.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108",
+      "prompt_file": "logs/2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 18,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 33,
+          "step": 1,
+          "note": "The user clarified that the session commands had been intentionally removed, correcting the script's inclusion of obsolete session commands.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "24ce4da4-53c0-416b-a18d-02dd1624463d",
+      "prompt_file": "logs/24ce4da4-53c0-416b-a18d-02dd1624463d.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 4,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 5,
+          "step": 1,
+          "note": "The user says the validator became too strict, asks to remove the strict checks, and specifies the desired empty-title labeling or title-generation behavior instead.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108",
+      "prompt_file": "logs/2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "repetitive-requirements-fixes",
+      "cause_prompt": 18,
+      "confidence": 0.94,
+      "evidence": [
+        {
+          "prompt": 19,
+          "step": 1,
+          "note": "The user reported that the end-to-end test was not actually checking the metadata in the entire/sessions commits.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "eb529204-a1f1-4a0a-9581-ef75bcbfffc8",
+      "prompt_file": "logs/eb529204-a1f1-4a0a-9581-ef75bcbfffc8.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.86,
+      "evidence": [
+        {
+          "prompt": 4,
+          "step": 3,
+          "note": "The agent explicitly says it needs to clarify key decisions before proceeding, including the target storage provider and intended architecture.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 4,
+          "step": 4,
+          "note": "The agent begins a sequence of clarification questions because the initial request did not specify the storage target.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "526f2e99-089f-466b-98d7-566241baabab",
+      "prompt_file": "logs/526f2e99-089f-466b-98d7-566241baabab.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 6,
+      "confidence": 0.94,
+      "evidence": [
+        {
+          "prompt": 6,
+          "step": 11,
+          "note": "The agent explicitly says it should clarify what 'on the agent conversations' means and considers multiple possible placements, but proceeds by choosing its own interpretation.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "38df405e-e626-45ce-aba4-fe921af77dd8",
+      "prompt_file": "logs/38df405e-e626-45ce-aba4-fe921af77dd8.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 6,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 6,
+          "step": 3,
+          "note": "The agent explicitly questions what building preset:base means and recognizes uncertainty about whether to deliver it globally, ship it in the plugin, or generate it through a command.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 6,
+          "step": 7,
+          "note": "The agent states that unresolved delivery, template, and configuration decisions need clarification before proceeding.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 6,
+          "step": 8,
+          "note": "The agent tells the user there are unresolved decisions affecting preset:base and asks targeted questions to resolve them.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "b47b9afc-1f96-485f-a173-019b6da28152",
+      "prompt_file": "logs/b47b9afc-1f96-485f-a173-019b6da28152.prompt.txt",
+      "call_name": "not_enough_specification",
+      "subcategory": "self-report",
+      "cause_prompt": 1,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 1,
+          "step": 9,
+          "note": "The agent's reasoning says it needs to clarify severity, category, and naming decisions before proceeding confidently.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 1,
+          "step": 39,
+          "note": "The agent explicitly tells the user that it has two design decisions to clarify before writing the final plan.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 1,
+          "step": 40,
+          "note": "The agent asks the user to choose how to resolve the severity and observation-type design decisions.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": null,
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "b9561101-d5e5-4463-989b-d8c56e5e4fcc",
+      "prompt_file": "logs/b9561101-d5e5-4463-989b-d8c56e5e4fcc.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 11,
+      "confidence": 0.76,
+      "evidence": [
+        {
+          "prompt": 11,
+          "step": 1,
+          "note": "The user reports that the diagram is not displayed and asks whether there is a problem with its notation, without providing a screenshot or other visual reference.",
+          "prompt_kind": "real"
+        },
+        {
+          "prompt": 11,
+          "step": 2,
+          "note": "The agent begins investigating Mermaid rendering after the user reports the missing visual output.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696",
+      "prompt_file": "logs/17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 2,
+      "confidence": 0.86,
+      "evidence": [
+        {
+          "prompt": 2,
+          "step": 1,
+          "note": "The user requests changing the Overview display to show the transcript and address missing content, without providing any visual reference.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "incorrect",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "2df45c59-7897-4fe9-9c47-cb66fad8680b",
+      "prompt_file": "logs/2df45c59-7897-4fe9-9c47-cb66fad8680b.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 17,
+      "confidence": 0.93,
+      "evidence": [
+        {
+          "prompt": 17,
+          "step": 1,
+          "note": "The user asks whether the frontend can display real-time in the terminal for a better tech vibe, which is a UI/appearance request without providing a visual reference.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    },
+    {
+      "type": "finding",
+      "session_id": "72fe8420-b669-4cea-ba2a-6196ced13326",
+      "prompt_file": "logs/72fe8420-b669-4cea-ba2a-6196ced13326.prompt.txt",
+      "call_name": "no_visual_reference",
+      "subcategory": "no_visual_reference",
+      "cause_prompt": 5,
+      "confidence": 0.96,
+      "evidence": [
+        {
+          "prompt": 5,
+          "step": 1,
+          "note": "The user asks for a UI check and opinions after the visual change, without supplying any image, mockup, or external design reference.",
+          "prompt_kind": "real"
+        }
+      ],
+      "human_verdict": "correct",
+      "note": ""
+    }
+  ]
+}

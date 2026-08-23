@@ -12,7 +12,7 @@ WORKFLOW (session-level, original):
   1. Generate a template (picks N sessions at random, no LLM calls):
        python benchmark.py generate 20 --logs-dir logs --out benchmark.json
 
-  2. Fill in benchmark.json by hand:
+  2. Fill in benchmark_findings_v3.json by hand:
        - Open each session's .prompt.txt (path is printed in the template)
        - Read it YOURSELF, without looking at what the model said
        - For each subcategory, write true / false / null (null = "unsure,
@@ -20,7 +20,7 @@ WORKFLOW (session-level, original):
        - Optionally add a one-line note explaining your call
 
   3. Score it:
-       python benchmark.py score --template benchmark.json --logs-dir logs
+       python3 benchmark.py score-findings --template benchmark_findings_v3.json --logs-dir logs --thresholds 0.0
 
      Prints, per subcategory: true positives / false positives / false
      negatives / true negatives, precision, recall, and overall agreement —
@@ -76,6 +76,7 @@ import glob
 import json
 import os
 import random
+from collections import Counter, defaultdict
 
 # Mirrors classify.py's CALLS/all_result_keys(), duplicated here on purpose
 # (same reasoning as report.py not importing case_file.py) — this script
@@ -445,6 +446,138 @@ def score(template_path, logs_dir=None):
         print("\nno disagreements — every filled-in judgment matched the model")
 
 
+def _finding_key(f_or_item):
+    """The composite key ('call_name:subcategory', or just 'call_name' for
+    the single-symptom case) used for both per-subcategory quotas and for
+    deduplication. Works on either a raw pool entry (from
+    _all_findings_with_context) or an already-written template item, since
+    both use the same field names."""
+    call_name = f_or_item["call_name"]
+    subcat = f_or_item.get("subcategory", call_name)
+    return f"{call_name}:{subcat}" if subcat and subcat != call_name else call_name
+
+
+def _finding_identity(f_or_item):
+    """Uniquely identifies one real-world finding, for dedup on merge:
+    same session, same call, same subcategory, same cause. Two findings
+    with the same identity are the same underlying claim, even if sampled
+    on different runs."""
+    return (f_or_item["session_id"], f_or_item["call_name"],
+            f_or_item.get("subcategory", f_or_item["call_name"]), f_or_item["cause_prompt"])
+
+
+def sample_findings_balanced(logs_dir, per_subcategory, max_per_session, seed, out_path, merge_path=None):
+    """Samples up to `per_subcategory` lowest-confidence findings for EACH
+    of the 8 keys (not just lowest-confidence overall, which — with an
+    uneven mix of subcategories in the dataset — mostly just re-samples
+    whichever subcategory is most common and starves the rest). If
+    `merge_path` is given, findings already in that (presumably
+    hand-judged) template are kept AS-IS — including their human_verdict —
+    and only the remaining shortfall per key is filled from fresh
+    candidates; nothing already judged gets re-picked or duplicated.
+    zero_finding_session items are never included here, and are dropped if
+    present in a merged-in template."""
+    ids = _session_ids_from_logs(logs_dir)
+    if not ids:
+        raise SystemExit(f"no *.meta.json files found in '{logs_dir}'")
+
+    metas = {}
+    for sid in ids:
+        with open(os.path.join(logs_dir, f"{sid}.meta.json"), encoding="utf-8") as f:
+            metas[sid] = json.load(f)
+    usable_ids = [sid for sid in ids if _all_calls_ok(metas[sid])]
+
+    existing_items = []
+    existing_identities = set()
+    existing_count_per_key = Counter()
+    per_session_count = Counter()
+    if merge_path:
+        with open(merge_path, encoding="utf-8") as f:
+            prev = json.load(f)
+        dropped_zero = 0
+        for it in prev.get("items", []):
+            if it.get("type") != "finding":
+                dropped_zero += 1
+                continue
+            existing_items.append(it)
+            existing_identities.add(_finding_identity(it))
+            existing_count_per_key[_finding_key(it)] += 1
+            per_session_count[it["session_id"]] += 1
+        print(f"merged {len(existing_items)} existing finding(s) from {merge_path}"
+              + (f" ({dropped_zero} zero_finding_session item(s) dropped)" if dropped_zero else ""))
+
+    pool_by_key = defaultdict(list)
+    for sid in usable_ids:
+        for f in _all_findings_with_context(metas[sid], sid):
+            if _finding_identity(f) in existing_identities:
+                continue  # already have this exact finding from the merge
+            pool_by_key[_finding_key(f)].append(f)
+
+    def sort_key(f):
+        c = f["confidence"]
+        return c if isinstance(c, (int, float)) and not isinstance(c, bool) else -1
+    for key in pool_by_key:
+        pool_by_key[key].sort(key=sort_key)
+
+    new_items = []
+    have_per_key = Counter(existing_count_per_key)
+    for key in ALL_KEYS:
+        need = max(per_subcategory - existing_count_per_key.get(key, 0), 0)
+        added = 0
+        for f in pool_by_key.get(key, []):
+            if added >= need:
+                break
+            sid = f["session_id"]
+            if per_session_count[sid] >= max_per_session:
+                continue
+            new_items.append({
+                "type": "finding",
+                "session_id": sid,
+                "prompt_file": os.path.join(logs_dir, f"{sid}.prompt.txt"),
+                "call_name": f["call_name"],
+                "subcategory": f["subcategory"],
+                "cause_prompt": f["cause_prompt"],
+                "confidence": f["confidence"],
+                "evidence": f["evidence"],
+                "human_verdict": None,
+                "note": "",
+            })
+            per_session_count[sid] += 1
+            added += 1
+        have_per_key[key] += added
+
+    all_items = existing_items + new_items
+    template = {
+        "instructions": FINDINGS_INSTRUCTIONS,
+        "key_descriptions": KEY_DESCRIPTIONS,
+        "seed": seed,
+        "logs_dir": logs_dir,
+        "per_subcategory_target": per_subcategory,
+        "max_per_session": max_per_session,
+        "items": all_items,
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(template, f, indent=2)
+
+    print(f"\nWrote {out_path}: {len(all_items)} total findings "
+          f"({len(existing_items)} kept as-is + {len(new_items)} newly added)\n")
+    print(f"per-subcategory counts (target = {per_subcategory} each):")
+    short_keys = []
+    for key in ALL_KEYS:
+        have = have_per_key.get(key, 0)
+        flag = ""
+        if have < per_subcategory:
+            flag = "  <-- fewer available than requested"
+            short_keys.append(key)
+        print(f"  {key:55s} {have}/{per_subcategory}{flag}")
+    if short_keys:
+        print(f"\n{len(short_keys)} key(s) couldn't reach the target — this dataset simply "
+              f"doesn't have enough distinct findings for them yet. Running run_experiment.py "
+              f"on more sessions would give this more to draw from.")
+    print("\nNext: newly added items have human_verdict=null — fill those in (leave the "
+          "already-judged ones alone), then run 'score-findings'.")
+
+
 def score_findings(template_path, logs_dir=None, thresholds=None):
     """Confusion matrix (TP/FP/FN/TN) + accuracy/precision/recall, swept
     across confidence thresholds. Raising the threshold should trade
@@ -501,6 +634,29 @@ def score_findings(template_path, logs_dir=None, thresholds=None):
     if n_bad_confidence:
         print(f"note: {n_bad_confidence} judged finding(s) have a missing/invalid confidence — "
               f"treated as 0.0 (see _usable_confidence)")
+    print()
+
+    # Per-subcategory breakdown, threshold-INDEPENDENT — this is just the
+    # raw correct/incorrect split per key, since a finding's human_verdict
+    # doesn't change with the confidence threshold (only whether it's
+    # counted as "predicted positive" at that threshold does). Printed once
+    # here so you can see which specific subcategories are actually driving
+    # the pooled numbers below, instead of one blended accuracy hiding
+    # very different per-key performance.
+    per_key = {}
+    for it in scored:
+        key = _finding_key(it)
+        per_key.setdefault(key, {"correct": 0, "incorrect": 0})
+        per_key[key][it["human_verdict"]] += 1
+
+    print("per-subcategory breakdown (raw correct/incorrect, same regardless of threshold):")
+    print(f"{'subcategory':55s} {'correct':>8s} {'incorrect':>10s} {'accuracy':>9s}")
+    for key in ALL_KEYS:
+        v = per_key.get(key, {"correct": 0, "incorrect": 0})
+        total = v["correct"] + v["incorrect"]
+        acc = v["correct"] / total if total else float("nan")
+        acc_str = "n/a" if acc != acc else f"{acc:.0%}"
+        print(f"{key:55s} {v['correct']:>8} {v['incorrect']:>10} {acc_str:>9s}")
     print()
 
     for T in thresholds:
@@ -577,6 +733,21 @@ def parse_args(argv=None):
     sc2.add_argument("--thresholds", default="0.0,0.5,0.7,0.9",
                       help="comma-separated confidence thresholds to sweep (default 0.0,0.5,0.7,0.9)")
 
+    sfb = sub.add_parser("sample-findings-balanced",
+                          help="sample up to N lowest-confidence findings PER SUBCATEGORY, "
+                               "optionally merging in an already-judged template")
+    sfb.add_argument("--logs-dir", default="logs")
+    sfb.add_argument("--per-subcategory", type=int, default=8,
+                      help="target findings per subcategory key (default 8)")
+    sfb.add_argument("--max-per-session", type=int, default=2,
+                      help="cap on how many findings can come from the same session (default 2)")
+    sfb.add_argument("--seed", type=int, default=42)
+    sfb.add_argument("--merge", default=None,
+                      help="an existing (possibly hand-judged) template to keep/reuse — "
+                           "its finding items are kept as-is, including human_verdict; "
+                           "zero_finding_session items in it are dropped")
+    sfb.add_argument("--out", default="benchmark_findings_balanced.json")
+
     return parser.parse_args(argv)
 
 
@@ -592,3 +763,6 @@ if __name__ == "__main__":
     elif args.mode == "score-findings":
         thresholds = [float(x) for x in args.thresholds.split(",")]
         score_findings(args.template, args.logs_dir, thresholds)
+    elif args.mode == "sample-findings-balanced":
+        sample_findings_balanced(args.logs_dir, args.per_subcategory, args.max_per_session,
+                                  args.seed, args.out, args.merge)
