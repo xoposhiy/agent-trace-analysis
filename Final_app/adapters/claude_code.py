@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -458,6 +459,30 @@ _MACHINE_PROMPT_TAGS = (
     "<bash-stdout>",
     "<bash-stderr>",
 )
+
+
+_MACHINE_TAG_PATTERN = re.compile(
+    "|".join(
+        rf"{re.escape(tag)}.*?({re.escape(tag[0] + '/' + tag[1:])}|$)"
+        for tag in _MACHINE_PROMPT_TAGS
+    ),
+    re.DOTALL,
+)
+
+
+def strip_injected_machinery(text: str) -> str:
+    """Remove any embedded machinery-tag block, wherever it falls in ``text``.
+
+    ``is_human_prompt`` only checks whether ``text`` *starts with* a machinery
+    tag, so a line where real typed text is followed by injected content in
+    the same line — e.g. ``"my real question\\n<system-reminder>...\\n"`` —
+    still passes as human (correctly: the human part is real), but the
+    injected tail would otherwise ride along verbatim into anything that
+    treats ``.text`` as pure user speech, such as the task-forest judge. This
+    strips that tail (or any such block anywhere in the string) before that
+    happens.
+    """
+    return _MACHINE_TAG_PATTERN.sub("", text).strip()
 
 
 def is_human_prompt(line: dict, text: str, is_subagent: bool = False) -> bool:

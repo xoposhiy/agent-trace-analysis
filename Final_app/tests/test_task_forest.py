@@ -150,6 +150,28 @@ def test_prompt_numbers_every_message_and_asks_for_hierarchical_ids():
     assert "MINIFIED JSON" in prompt
 
 
+def test_prompt_states_a_boundary_falls_only_between_numbered_messages():
+    prompt = build_task_forest_prompt(["fix the login bug", "now optimize the query"])
+
+    assert "ATOMIC MESSAGE" in prompt
+    assert "never split one, never merge two" in prompt
+
+
+def test_prompt_states_the_exact_expected_assignment_count():
+    """The judge model (haiku) drops messages from its own ``assignments``
+
+    array once a session gets long enough — verified against real sessions,
+    2026-08-23: a 48-message session came back with only 39-41 assignments
+    under the old prompt, silently failing ``detect``'s length guard on most
+    real sessions. Stating the exact count twice and asking the model to
+    self-check fixed it in live testing.
+    """
+    prompt = build_task_forest_prompt(["a", "b", "c"])
+
+    assert "EXACTLY 3 messages" in prompt
+    assert "EXACTLY 3 entries" in prompt
+
+
 # ----------------------------------------------------------------------
 # judge_task_forest
 # ----------------------------------------------------------------------
@@ -184,6 +206,25 @@ def test_judge_caches_so_a_repeat_call_never_reaches_the_llm_again(
     judge_task_forest(["hi"])
 
     assert len(calls) == 1
+
+
+def test_judge_cache_key_changes_when_the_prompt_wording_changes(
+    monkeypatch: pytest.MonkeyPatch
+):
+    """A prompt-template edit must invalidate every prior verdict.
+
+    ``_forest_cache_key`` hashes the FULL rendered prompt, not just the raw
+    ``prompt_texts`` — otherwise a session judged under an old prompt version
+    would keep serving that stale answer forever after the prompt (and what
+    "correct" means) changes. This pins that behaviour directly, rather than
+    relying on the real prompt text staying edited.
+    """
+    key_before = task_forest._forest_cache_key(["hi"])
+
+    monkeypatch.setattr(task_forest, "build_task_forest_prompt", lambda texts: "a different prompt")
+    key_after = task_forest._forest_cache_key(["hi"])
+
+    assert key_before != key_after
 
 
 def test_judge_returns_none_when_the_response_is_not_valid_json(
@@ -268,14 +309,14 @@ def _iso_at(offset_seconds: int) -> str:
     return ts.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
-def _two_task_transcript(claude_home: Path) -> Path:
+def _two_task_transcript(claude_home: Path, prompts: list[str] | None = None) -> Path:
     """Two unrelated tasks, two prompts each, five cache-read-heavy edits
     after every prompt — enough calls either side of the switch to price a
     real saving. The judge's own segmentation is faked in each test; the
     prompt text here only has to be distinct enough to look like two goals.
     """
     lines = []
-    prompts = [
+    prompts = prompts if prompts is not None else [
         "Fix the login bug",
         "Also add a test for the login fix",
         "Now optimize the slow database query",
@@ -320,6 +361,35 @@ def test_detect_flags_two_independent_tasks(claude_home: Path, monkeypatch: pyte
     assert problem.data["runs"][0]["label"] == "Fix login bug"
     assert problem.data["runs"][1]["end_ts"] is None
     assert problem.data["dollar_saving"] > 0
+
+
+def test_detect_strips_injected_machinery_before_it_reaches_the_judge(
+    claude_home: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A trailing ``<system-reminder>`` on an otherwise-human line still
+
+    counts as ``is_human_prompt`` (the human part is real), but it must never
+    reach the judge as if the user had typed it.
+    """
+    path = _two_task_transcript(claude_home, prompts=[
+        "Fix the login bug",
+        "Also add a test for the login fix\n"
+        "<system-reminder>remember the thing</system-reminder>",
+        "Now optimize the slow database query",
+        "Add an index to speed it up further",
+    ])
+    session = claude_code.load_session(PROJECT_SLUG, path)
+    calls = _install_forest_judge(
+        monkeypatch, ["T1", "T1", "T2", "T2"],
+        [{"id": "T1", "label": "Fix login bug"}, {"id": "T2", "label": "Optimize query"}],
+    )
+
+    detect(session)
+
+    sent_prompt = calls[0]["messages"][0]["content"]
+    assert "<system-reminder>" not in sent_prompt
+    assert "remember the thing" not in sent_prompt
+    assert "Also add a test for the login fix" in sent_prompt
 
 
 def test_detect_returns_none_for_a_single_task(claude_home: Path, monkeypatch: pytest.MonkeyPatch):

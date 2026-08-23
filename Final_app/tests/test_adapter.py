@@ -494,6 +494,23 @@ def test_a_prompt_recorded_as_sdk_is_still_human(claude_home: Path):
     assert session.events[0].is_human_prompt is True
 
 
+def test_strip_injected_machinery_removes_a_trailing_tag_from_real_text():
+    """``is_human_prompt`` only checks the line's PREFIX, so real typed text
+
+    followed by injected content in the same line still counts as human —
+    correctly, since the human part is real — but the trailing block must not
+    reach anything that treats ``.text`` as pure user speech.
+    """
+    mixed = "my real question\n<system-reminder>remember the thing</system-reminder>"
+
+    assert claude_code.strip_injected_machinery(mixed) == "my real question"
+
+
+def test_strip_injected_machinery_is_a_no_op_on_clean_text():
+    assert claude_code.strip_injected_machinery("just a normal question") == \
+        "just a normal question"
+
+
 def test_only_human_prompts_reach_user_prompts(claude_home: Path):
     path = write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", [
         user_line("u1", "the real question", "2026-08-01T10:00:00.000Z"),

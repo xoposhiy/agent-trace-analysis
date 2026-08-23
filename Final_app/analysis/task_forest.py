@@ -18,11 +18,16 @@ Ported near-verbatim from a prior prototype
 ``Local_app/split_advisor.py``'s ``judge_task_forest``): one LLM call
 segments every user prompt into a hierarchical task id — top-level ids
 (``T1``, ``T2``, …) are independent goals, and an id may recur later if the
-user returns to it; dotted ids (``T1.1``) are self-contained tangents within
-a parent task. This detector only prices and visualizes **top-level**
-switches (``_top_level_bands`` folds a child dip like ``T1 → T1.1 → T1`` back
-into ``T1``'s band) — the child/tangent pattern is a different, not-yet-built
-"sub-agent opportunity" detector.
+user returns to it; dotted ids (``T1.1``) are tangents within a parent task —
+both self-contained detours AND, just as often, the user asking about,
+clarifying, or verifying that same task's own work (verified against a real
+session, 2026-08-22: a run of "explain this", "where is this in code", "did I
+commit everything" after a feature was built was mis-judged as two new
+top-level tasks before the prompt called this out explicitly). This detector
+only prices and visualizes **top-level** switches (``_top_level_bands`` folds
+a child dip like ``T1 → T1.1 → T1`` back into ``T1``'s band) — the
+child/tangent pattern is a different, not-yet-built "sub-agent opportunity"
+detector.
 
 THE PRICING MODEL
 ------------------
@@ -39,6 +44,7 @@ import hashlib
 import json
 from typing import Optional
 
+from Final_app.adapters import claude_code
 from Final_app.analysis import chunk_split_model as csm
 from Final_app.analysis import classify
 from Final_app.analysis import plan_mode as pm
@@ -134,36 +140,71 @@ def _top_level_bands(timeline: list[tuple[str, int, int]]) -> list[tuple[str, in
 def build_task_forest_prompt(prompt_texts: list[str]) -> str:
     """The task-forest judge prompt. Pure string; no API call.
 
-    Ported verbatim from the prototype's ``session_core.build_task_forest_prompt``.
+    Ported from the prototype's ``session_core.build_task_forest_prompt``, then
+    hardened: the judge model silently drops messages from its own
+    ``assignments`` array once a session runs long — verified against 9 real
+    sessions, 2026-08-23, 7 of 9 came back short (one 48-message session
+    returned only 39-41 assignments). Stating the exact expected count twice
+    (once up front, once right before the schema) and asking the model to
+    self-check its own count before answering fixed every case tested.
+    ``detect`` still refuses anything short, per CLAUDE.md §5 — this just makes
+    "short" rare instead of routine.
     """
+    count = len(prompt_texts)
     numbered = "\n".join(f"{i + 1}. {text}" for i, text in enumerate(prompt_texts))
     return (
-        "Here are the user's messages from one coding session, in order:\n\n"
+        f"Here are the user's {count} messages from one coding session, in order:\n\n"
         f"{numbered}\n\n"
-        "Assign EVERY message to a task, in order, using HIERARCHICAL task ids.\n\n"
+        "Each numbered item is ALREADY ONE ATOMIC MESSAGE the user actually typed "
+        "— never split one, never merge two into one task boundary. A task's span "
+        "starts at one numbered message and ends at another; a boundary can fall "
+        "only BETWEEN two numbered messages, never inside one.\n\n"
+        f"There are EXACTLY {count} messages numbered above — count them yourself "
+        "before answering. Assign EVERY one of them to a task, in order, using "
+        "HIERARCHICAL task ids.\n\n"
         "Top-level tasks — `T1`, `T2`, `T3`, … — are GENUINELY INDEPENDENT goals "
         "(unrelated to each other). Number them in the order they first appear, and "
         "reuse the SAME id when the user RETURNS to that task later (e.g. T1 … T2 … "
         "T1).\n\n"
-        "Sub-agent children — `T1.1`, `T1.2`, … — are work that is RELATED to task "
-        "`T1` but is a self-contained tangent ('similar but not quite the main goal'): "
-        "a big read-only investigation, a side change, a detour. Crucially: if the "
-        "user LEAVES a task to do some related work and then COMES BACK to that task, "
-        "the in-between work is a CHILD of it, NOT a new independent task — because "
+        "Sub-agent children — `T1.1`, `T1.2`, … — are ANY message that is TANGENT to "
+        "task `T1` rather than a genuinely new goal. This covers two shapes: (a) a "
+        "self-contained detour — a big read-only investigation, a side change; and "
+        "(b) — just as common, and easy to miss — the user asking ABOUT, "
+        "clarifying, verifying, or double-checking work a task already did: "
+        "'explain how this works', 'where is this in the code', 'what does X "
+        "mean', 'is this right', 'did I commit everything'. None of these ask for "
+        "anything new — they are the user looking closer at `T1`'s own work, so "
+        "they are `T1`'s children, never a new top-level task, no matter how many "
+        "such messages run in a row. A tangent is still its own TASK — give it its "
+        "own id and its own short label in \"tasks\" exactly like a top-level task "
+        "— it is simply NESTED under the task it is tangent to, rather than "
+        "counted as an independent goal.\n\n"
+        "Crucially: if the user LEAVES a task to do some related work — including "
+        "asking questions about it — and then COMES BACK to that task, the "
+        "in-between work is a CHILD of it, NOT a new independent task — because "
         "returning proves it was a side-quest that a sub-agent could have handled.\n\n"
         "Do NOT create a new task (top-level OR child) for a different PHASE of the "
-        "same work: design→plan, plan→implement, implement→test/fix of the SAME "
-        "feature, or just different files/words for the same goal.\n\n"
+        "same work: design→plan, plan→implement, implement→explain/clarify, "
+        "implement→document/write-up, implement→test/fix of the SAME feature, or "
+        "just different files/words for the same goal.\n\n"
         "Only use a new TOP-LEVEL id when the goal genuinely changes to something "
-        "unrelated the user does NOT return from.\n\n"
+        "unrelated the user does NOT return from — not merely because the "
+        "conversation moved from doing the work to talking about it.\n\n"
+        "BEFORE you finalize, re-check every top-level id against the messages "
+        "AFTER it: if the surrounding task's goal shows up again later, whatever "
+        "you assigned in between was a side-quest, not a new goal — go back and "
+        "renumber it as a CHILD of the task it interrupted, not a new top-level "
+        "id.\n\n"
         "Answer with ONLY a JSON object, no other text:\n"
         '{"tasks": [{"id": "T1", "label": "<short concrete name>"}, '
         '{"id": "T1.1", "label": "<the tangent/side-task>"}, …], '
         '"assignments": ["T1", "T1.1", "T1", "T2", …], '
         '"summary": "<one short, concrete sentence naming the session\'s overall '
         'work>"}\n\n'
-        '"assignments" MUST have exactly one id per message, in the same order and '
-        "length as the numbered list above, and every id must appear in \"tasks\".\n\n"
+        f'"assignments" MUST have EXACTLY {count} entries — one id per message, in '
+        "the same order as the numbered list above — and every id must appear in "
+        '"tasks". Before you output, count the entries in your own "assignments" '
+        f"array and confirm it is {count}; if it is not, fix it before answering.\n\n"
         "Output MINIFIED JSON: a single line, no spaces, no newlines, no markdown "
         "fences. Keep every \"label\" to at most 5 words."
     )
@@ -202,8 +243,16 @@ def _save_cache() -> None:
 
 
 def _forest_cache_key(prompt_texts: list[str]) -> str:
-    """Content-addressed, so the same sequence of prompts is judged once ever."""
-    payload = json.dumps([prompt_texts, JUDGE_MODEL], sort_keys=True, ensure_ascii=False)
+    """Content-addressed on the FULL rendered prompt, not just the raw messages.
+
+    Hashing ``build_task_forest_prompt(prompt_texts)`` rather than
+    ``prompt_texts`` means an edit to the judge prompt's wording naturally
+    invalidates every prior verdict — a session judged under an old prompt
+    version is never silently served that stale answer once the prompt (and
+    therefore what "correct" means) has changed.
+    """
+    payload = json.dumps([build_task_forest_prompt(prompt_texts), JUDGE_MODEL],
+                         sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
@@ -347,7 +396,13 @@ def detect(session: Session) -> Optional[Problem]:
     if len(prompt_events) < MIN_PROMPTS_FOR_JUDGE:
         return None
 
-    forest = judge_task_forest([e.text for e in prompt_events])
+    # ``is_human_prompt`` only checks that a line's TEXT STARTS WITH real
+    # typed content, so a line where genuine text is followed by injected
+    # machinery in the same line (e.g. a trailing ``<system-reminder>``)
+    # still counts as human — correctly — but the injected tail must not
+    # ride along into what the judge is told a person said.
+    prompt_texts = [claude_code.strip_injected_machinery(e.text) for e in prompt_events]
+    forest = judge_task_forest(prompt_texts)
     if forest is None:
         return None
 
