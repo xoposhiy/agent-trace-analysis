@@ -554,8 +554,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "Not a real bug — the agent's investigation showed the fee display was actually correct (base fee + 0 priority fee, since the network genuinely had no priority fees at that moment). The user's report led to a scope/design decision to simplify back to the constant, not a fix for broken code."
     },
     {
       "type": "finding",
@@ -579,8 +579,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 2 the agent said all tests pass and declared the work finished. In prompt 3 the user says fix test, and the suite does show a real failure in TestShadowStrategy_MidSessionCommit_FromTranscript. This is a genuine finished-then-broken cycle, so it fits repetitive-bug-fixes."
     },
     {
       "type": "finding",
@@ -598,8 +598,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "Prompt 1 implemented the full pipeline (including the new diff-capture/reset flow) and the agent declared it finished with all tests passing. In prompt 9, a real production remediation run failed with an actual git error (pathspec '.' did not match any file(s)), which the agent then diagnosed and fixed. This is a genuine finished-then-broken cycle caused by the work done in prompt 1, so it fits repetitive-bug-fixes."
     },
     {
       "type": "finding",
@@ -617,8 +617,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 11 the agent implemented the download activity animation and declared it done. In prompt 13 the user tests it and reports the ring is not visible at all, only the pulse shows. That is a genuine finished-then-broken cycle, correctly tied to prompt 11."
     },
     {
       "type": "finding",
@@ -636,8 +636,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 6 the agent implemented the client-reuse fix and gave a full 'here is what changed' summary treating it as done. In prompt 7 the user reports subsequent questions are stuck on Thinking, a real regression the agent then had to diagnose and redesign around. This is a genuine finished-then-broken cycle correctly tied to prompt 6."
     },
     {
       "type": "finding",
@@ -655,8 +655,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 1 the agent fixed the query gating and confidently described the resulting flow as spinner-then-data. In prompt 2 the user reports the screen goes empty while the org loads, a real regression caused by a TanStack Query v5 detail (isLoading vs isPending) the agent hadn't verified. Genuine finished-then-broken cycle, correctly tied to prompt 1."
     },
     {
       "type": "finding",
@@ -737,8 +737,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 3 the agent guessed the repo name was outdated and renamed it. In prompt 4 the user corrects this, saying savanna-vet-go is the real name. That's a real requirements mismatch, correctly tied to prompt 3."
     },
     {
       "type": "finding",
@@ -756,8 +756,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "This isn't a user pushback on finished work — it's the agent itself flagging uncertainty in 3.20 and asking the user to pick between two options, then the user answering with more detail in 4.1. That's the agent resolving its own self-admitted ambiguity, not the user rejecting a delivered implementation as wrong."
     },
     {
       "type": "finding",
@@ -775,8 +775,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 3, the agent hesitates mid-reply and openly says it needs to 'think about this again,' then asks the user to choose between two placement options (keep in folders.md vs. new ai-organize.md) — a clear self-admitted spec gap on where the feature should live in the docs."
     },
     {
       "type": "finding",
@@ -784,7 +784,7 @@
       "prompt_file": "logs/f49e1b79-74d3-42b8-a526-df0f3a236747.prompt.txt",
       "call_name": "not_enough_specification",
       "subcategory": "self-report",
-      "cause_prompt": 6,
+      "cause_prompt": 8,
       "confidence": 0.93,
       "evidence": [
         {
@@ -794,8 +794,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "The agent openly says renaming to AppPineconeClient isn't quite right since the client is shared by both app and platform, then asks the user how to handle it. That is a clear self-admitted spec gap on naming scope, matching the self-report subcategory."
     },
     {
       "type": "finding",
@@ -813,8 +813,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In step 30, the agent notices that reconnecting when a model is picked mid-chat might replace the current session, says this 'may be OK' or 'may be undesirable,' then just picks an assumption and moves on without asking the user. That is the agent openly admitting it is not sure what behavior is wanted here, which matches self-report."
     },
     {
       "type": "finding",
@@ -1034,8 +1034,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "The user didn't report a bug in prompt 2 — they changed their mind and asked for something different instead (transcript view instead of merged section). The transcript-missing-beginning issue is a real bug, but it's in a different, untouched part of the code, not something prompt 1 broke. So this isn't a real finished-then-broken cycle tied to prompt 1."
     },
     {
       "type": "finding",
@@ -1097,8 +1097,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "The two messages are word-for-word identical, so this isn't the user reframing or expanding what they wanted — the spec never changed. In prompt 6 the agent claimed the fix was done (all 16 patterns covered), but in prompt 8 the code still only had 2 variants plus a stray typo, meaning the earlier fix simply wasn't actually completed correctly. That's a verification/execution failure."
     },
     {
       "type": "finding",
@@ -1116,8 +1116,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "This isn't a requirements misunderstanding — the agent added entire session status/list calls to the script on its own initiative, assuming that command existed. It didn't, so the script threw an actual command-not-found error. That's a technical/verification problem (agent didn't check the command was real), not a case of building the wrong thing that the user then had to redirect. It also only happens once, not repeatedly."
     },
     {
       "type": "finding",
@@ -1135,8 +1135,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In prompt 4 the agent rewrote the issue validator with stricter length/format checks based on its own judgment, since the user only said the current checks were too weak. In prompt 5 the user says that's now too strict and describes a different behavior they actually want (auto-title generation instead). That's a genuine requirements mismatch, not a bug, correctly tied back to prompt 4's implementation."
     },
     {
       "type": "finding",
@@ -1154,8 +1154,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "Prompt 18 asked for a script that runs the basic scenario; it never specified that metadata inspection was required. In prompt 19 the user simply asks for an additional check to be added — that's incremental script development, not the agent misunderstanding what was wanted and needing correction. It reads like normal healthy iteration on a test script, not a repetitive-requirements-fixes cycle."
     },
     {
       "type": "finding",
@@ -1179,8 +1179,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "This is not a real self-report. Asking clarifying questions is just how the brainstorming skill is designed to work before writing a design doc, not the agent admitting the spec was missing. The agent never assumes something and moves on, it asks and waits for the real answer each time. Also step 4.3 is private thinking the user never saw, so it cannot count as something said to the user."
     },
     {
       "type": "finding",
@@ -1198,8 +1198,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "incorrect",
+      "note": "The cited evidence (6.11) is a thinking block, not something the agent told the user. The agent only wondered privately about what on the agent conversations meant, then just picked an interpretation and moved on without ever saying to the user that it was unsure. Since the user never saw this, it does not count as a self-report."
     },
     {
       "type": "finding",
@@ -1229,8 +1229,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In reply-to-user 6.8, the agent tells the user there are unresolved decisions from the plan affecting preset:base and asks targeted questions before continuing. That is a real, spoken admission of a spec gap for prompt 6, which matches self-report."
     },
     {
       "type": "finding",
@@ -1260,8 +1260,8 @@
           "prompt_kind": "real"
         }
       ],
-      "human_verdict": null,
-      "note": ""
+      "human_verdict": "correct",
+      "note": "In reply-to-user 1.39, the agent tells the user it has design decisions to clarify before finishing the plan, then asks them directly in 1.40. That's a real, spoken admission of a spec gap tied to prompt 1, matching self-report."
     },
     {
       "type": "finding",

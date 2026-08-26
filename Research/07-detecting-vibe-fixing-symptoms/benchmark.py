@@ -12,7 +12,7 @@ WORKFLOW (session-level, original):
   1. Generate a template (picks N sessions at random, no LLM calls):
        python benchmark.py generate 20 --logs-dir logs --out benchmark.json
 
-  2. Fill in benchmark_findings_v3.json by hand:
+  2. Fill in benchmark_findings.json by hand:
        - Open each session's .prompt.txt (path is printed in the template)
        - Read it YOURSELF, without looking at what the model said
        - For each subcategory, write true / false / null (null = "unsure,
@@ -20,7 +20,7 @@ WORKFLOW (session-level, original):
        - Optionally add a one-line note explaining your call
 
   3. Score it:
-       python3 benchmark.py score-findings --template benchmark_findings_v3.json --logs-dir logs --thresholds 0.0
+       python3 benchmark.py score-findings --template benchmark_findings.json --logs-dir logs --thresholds 0.0
 
      Prints, per subcategory: true positives / false positives / false
      negatives / true negatives, precision, recall, and overall agreement —
