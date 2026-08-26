@@ -1,0 +1,1848 @@
+{
+  "counts": {
+    "scope_files_too_many": 30,
+    "scope_turns_too_long": 27,
+    "not_enough_verification:repetitive-bug-fixes": 20,
+    "not_enough_verification:not-tested": 46,
+    "not_enough_specification:no-spec-detected": 4,
+    "not_enough_specification:self-report": 6,
+    "not_enough_specification:repetitive-requirements-fixes": 12,
+    "not_enough_verification:ask-for-manual-testing": 9,
+    "not_enough_verification:self-report": 9,
+    "no_visual_reference": 10
+  },
+  "problems": {
+    "not_enough_verification:repetitive-bug-fixes": 44,
+    "not_enough_verification": 132,
+    "not_enough_verification:not-tested": 87,
+    "not_enough_specification:no-spec-detected": 6,
+    "not_enough_specification": 28,
+    "not_enough_specification:self-report": 8,
+    "not_enough_specification:repetitive-requirements-fixes": 18,
+    "not_enough_verification:ask-for-manual-testing": 17,
+    "not_enough_verification:self-report": 9,
+    "no_visual_reference": 13
+  },
+  "problems_real": {
+    "not_enough_verification:repetitive-bug-fixes": 43,
+    "not_enough_verification": 123,
+    "not_enough_verification:not-tested": 79,
+    "not_enough_specification:no-spec-detected": 5,
+    "not_enough_specification": 27,
+    "not_enough_specification:self-report": 8,
+    "not_enough_specification:repetitive-requirements-fixes": 18,
+    "not_enough_verification:ask-for-manual-testing": 17,
+    "not_enough_verification:self-report": 9,
+    "no_visual_reference": 12
+  },
+  "cause_kind_counts": {
+    "real": 216,
+    "system": 16
+  },
+  "evidence_counts": {
+    "not_enough_verification:repetitive-bug-fixes": 62,
+    "not_enough_verification": 226,
+    "not_enough_verification:not-tested": 132,
+    "not_enough_specification:no-spec-detected": 8,
+    "not_enough_specification": 51,
+    "not_enough_specification:self-report": 13,
+    "not_enough_specification:repetitive-requirements-fixes": 30,
+    "not_enough_verification:ask-for-manual-testing": 17,
+    "not_enough_verification:self-report": 15,
+    "no_visual_reference": 19
+  },
+  "category_counts": {
+    "not_enough_verification": 56,
+    "not_enough_specification": 16,
+    "no_visual_reference": 10
+  },
+  "call_successes": {
+    "not_enough_verification": 79,
+    "not_enough_specification": 79,
+    "no_visual_reference": 79
+  },
+  "call_failures": {},
+  "diagnostics": {
+    "validate: not_enough_verification: evidence step 68 is not in 1..3 for prompt 1 (kept as-is)": 1,
+    "validate: not_enough_verification: evidence step 29 is not in 1..2 for prompt 5 (kept as-is)": 1,
+    "validate: not_enough_verification: evidence step 9 is not in 1..1 for prompt 9 (kept as-is)": 1,
+    "validate: not_enough_verification: cause_prompt 7 is a [SYSTEM] block, not a user prompt (kept, marked system)": 3,
+    "validate: not_enough_verification: cause_prompt 8 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1,
+    "validate: not_enough_verification: cause_prompt 9 is a [SYSTEM] block, not a user prompt (kept, marked system)": 4,
+    "validate: not_enough_verification: cause_prompt 10 is a [SYSTEM] block, not a user prompt (kept, marked system)": 2,
+    "validate: not_enough_verification: cause_prompt 22 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1,
+    "validate: not_enough_specification: cause_prompt 6 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1,
+    "validate: no_visual_reference: cause_prompt 6 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1,
+    "validate: not_enough_verification: cause_prompt 4 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1,
+    "validate: not_enough_verification: evidence step 2 is not in 1..1 for prompt 48 (kept as-is)": 1,
+    "validate: not_enough_verification: evidence step 7 is not in 1..1 for prompt 48 (kept as-is)": 1,
+    "validate: not_enough_verification: evidence step 20 is not in 1..6 for prompt 7 (kept as-is)": 1,
+    "validate: not_enough_verification: cause_prompt 11 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1,
+    "validate: not_enough_verification: cause_prompt 2 is a [SYSTEM] block, not a user prompt (kept, marked system)": 1
+  },
+  "n_ok": 79,
+  "n_skipped": 0,
+  "n_empty": 1,
+  "total_user_prompts": 774,
+  "total_system_events": 464,
+  "session_ids": [
+    "8209f1c2-ccba-4dd6-8b9e-8d6d142183e2",
+    "80a57739-bc39-40ff-a01f-13e02a86387d",
+    "533ff7a3-d390-41ff-b9e8-1b09fb4c2fe2",
+    "ce380f30-6ea0-4c76-93d3-ea24e6cc2f6e",
+    "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+    "c7fa539b-6143-451a-98b1-5eeb226e623d",
+    "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+    "1b3690fe-335f-4eaa-b364-6ebfef856e97",
+    "216750b5-7575-41b6-bb65-57269b7740b4",
+    "01d8797c-6704-43c1-8d9a-ee67f0bfbf0b",
+    "0ca917c3-ff12-4915-afd9-95d7522d47f3",
+    "5e7c667b-338d-4f8c-bca6-021cdee525c0",
+    "ca1f137e-d8d1-43ed-9e7b-5aeb25acbea5",
+    "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+    "3d1f9b25-a19d-4f1b-a8d0-a7c32eeec8bc",
+    "6aca6112-17e5-426b-9457-f1b51a08cd48",
+    "894b454e-45bc-45f3-9e33-0d2e2a5a99b6",
+    "188be02c-59df-421c-b76e-a2b0a1048ddf",
+    "aa1f4450-d345-4b91-af6e-87dae650101e",
+    "7fc60e9d-6935-419a-bff1-51419f079e47",
+    "046e7195-6950-42b2-8f28-4428d398952f",
+    "debf8bba-81b9-4581-8f65-dd68c9dc86e3",
+    "eb529204-a1f1-4a0a-9581-ef75bcbfffc8",
+    "72fe8420-b669-4cea-ba2a-6196ced13326",
+    "83ea8135-ac8d-44d1-b34a-a01c542cd4b1",
+    "f2a654e1-4c4d-4b65-9699-82c7a8641c6f",
+    "b47b9afc-1f96-485f-a173-019b6da28152",
+    "17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696",
+    "8da68d37-2a8e-4b0d-a4a1-f12447375d70",
+    "071a67b9-5a93-4a6b-bc14-41c2ba85574b",
+    "43c87127-491b-488e-a553-95aa3f0414ac",
+    "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+    "f5a309c9-5aea-421c-85e8-1111b93edb51",
+    "2026-01-28-f566bb0f-9112-4e92-ae0e-2fe42014b652",
+    "e4d2a949-d40f-45f6-8d98-4a6c8ee456c0",
+    "d9f0a13a-2256-4ef2-a6ed-7fe605e55655",
+    "112ca1bb-3234-4466-8a4e-32155874c91b",
+    "3e27fb81-1b62-4889-a159-80cc27e4333d",
+    "2520200f-fb9b-4d39-b558-582ef0c3bc90",
+    "b9561101-d5e5-4463-989b-d8c56e5e4fcc",
+    "60639794-6077-4e88-a4d3-70aa566f1233",
+    "b2fed439-f101-43f3-98f5-76aeb201af1d",
+    "609f7cee-c4c5-4016-8d1a-95ec65b0f2dd",
+    "099d476e-36bb-41f5-a974-a5d9e4617389",
+    "e74fcdb5-a9ea-4036-82df-792b7c519103",
+    "8a35bf3e-b280-4b5d-bb0f-ccde53426ee5",
+    "2c61754b-db95-42ff-9fa2-450e05706bf2",
+    "38df405e-e626-45ce-aba4-fe921af77dd8",
+    "9892ee25-59c3-432b-96cd-76ee5f3ee45a",
+    "d779c2d4-e27c-474f-8f70-85101bf2a9f0",
+    "ee672412-b029-4ca0-b22f-7bbfa9a76cc4",
+    "5508e8eb-f86c-49b4-a4d2-0476af452251",
+    "ee198057-0f22-496f-9674-0af8f6e0aa80",
+    "0f4e3e43-8c53-4c2d-97b1-196014f36c5e",
+    "526f2e99-089f-466b-98d7-566241baabab",
+    "781eb8d6-8104-41a8-9d75-778c1c92ce88",
+    "0c3182b1-f294-4fb1-8426-5274385ded0f",
+    "2df45c59-7897-4fe9-9c47-cb66fad8680b",
+    "570f3120-9977-460f-9c05-c16673441aa3",
+    "dc003d45-ba1a-415d-b687-07e3bb1c880a",
+    "a1a5082c-34f9-4b1f-af70-2870eacef097",
+    "dbff22bc-97b4-4dd9-b7ad-e9e4a224b17b",
+    "b7c26e69-b857-43e2-8a5f-71a2cdef73c2",
+    "fb62ccae-10b3-42a6-9361-cc731ad07f4e",
+    "a33c7d91-4141-4964-ba99-2a5d6c6567a0",
+    "7916ffa0-cf9e-4cb7-a75f-8a1db33c75bd",
+    "637c5f1c-8cbc-4962-9383-5e9298cccc36",
+    "86b49c3d-e77b-496e-bd51-f00fca1f5c25",
+    "7f2fbf27-0a44-42e3-94a1-4bfb5b48f071",
+    "25c32fe0-d5fa-4ed5-bddf-8c230de5b05e",
+    "b3d89cc2-c6b8-4fff-89e3-e7501c7a45ee",
+    "2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108",
+    "24ce4da4-53c0-416b-a18d-02dd1624463d",
+    "a6dd97a2-6025-4b10-9456-0e33363d043e",
+    "6ece161c-31e7-4439-873f-bf6d62375c5a",
+    "e72ab63a-ea00-44e7-879e-cd0fe113ab80",
+    "039c7932-07b5-4d72-987c-d7fa070361c1",
+    "3c0675ed-e4d0-40a7-807a-0316109c81f1",
+    "304adb49-1eeb-4656-be69-1e05d52dc392",
+    "76ff0d3b-4928-4678-b4f0-96ecbf2daa18"
+  ],
+  "evidence_samples": {
+    "no_visual_reference": [
+      {
+        "session_id": "aa1f4450-d345-4b91-af6e-87dae650101e",
+        "cause_prompt": 6,
+        "cause_kind": "system",
+        "findings": [
+          {
+            "subcategory": "no_visual_reference",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 1,
+                "note": "The task requests using the product as a QA engineer to fix unfinished areas and make the Nuclom platform a polished product ready for launch, but provides no visual reference.",
+                "prompt_kind": "system"
+              },
+              {
+                "prompt": 22,
+                "step": 1,
+                "note": "The repeated Ralph-loop task again requests QA fixes and a polished, launch-ready product without supplying any screenshot, mockup, design file, or reference URL.",
+                "prompt_kind": "system"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no_visual_reference",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 1,
+                "note": "The user requests merging the visible Prompt and Context sections in the Overview tab, but provides no screenshot, mockup, design file, or reference URL.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          }
+        ]
+      },
+      {
+        "session_id": "17e4a8d1-13a9-45a4-9a6d-d2cd3d74f696",
+        "cause_prompt": 2,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no_visual_reference",
+            "evidence": [
+              {
+                "prompt": 2,
+                "step": 1,
+                "note": "The user requests changing the Overview display to show the transcript and address missing content, without providing any visual reference.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.86
+          }
+        ]
+      },
+      {
+        "session_id": "b9561101-d5e5-4463-989b-d8c56e5e4fcc",
+        "cause_prompt": 11,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no_visual_reference",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 1,
+                "note": "The user reports that the diagram is not displayed and asks whether there is a problem with its notation, without providing a screenshot or other visual reference.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 11,
+                "step": 2,
+                "note": "The agent begins investigating Mermaid rendering after the user reports the missing visual output.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.76
+          }
+        ]
+      },
+      {
+        "session_id": "e4d2a949-d40f-45f6-8d98-4a6c8ee456c0",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no_visual_reference",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 1,
+                "note": "The user requests changing the WaterShader highlight color for light and dark themes without providing any visual reference or design specification beyond the color values.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          }
+        ]
+      },
+      {
+        "session_id": "e4d2a949-d40f-45f6-8d98-4a6c8ee456c0",
+        "cause_prompt": 3,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no_visual_reference",
+            "evidence": [
+              {
+                "prompt": 3,
+                "step": 1,
+                "note": "The user requests changing the mobile background image from 100vh to 100dvh to alter its visual viewport behavior, without providing a screenshot, mockup, or design reference.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      }
+    ],
+    "not_enough_verification:repetitive-bug-fixes": [
+      {
+        "session_id": "01d8797c-6704-43c1-8d9a-ee67f0bfbf0b",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 4,
+                "note": "The agent declared the frontend change done without any test run or other verification evidence in the session.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 1,
+                "note": "After the earlier implementation had been treated as complete, the user reported a ClickHouse aggregate-alias error that required the agent to edit the API query.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.93
+          }
+        ]
+      },
+      {
+        "session_id": "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+        "cause_prompt": 13,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 14,
+                "step": 1,
+                "note": "After the first ring fix was declared complete, the user reported that the ring was still not visible.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 1.0
+          }
+        ]
+      },
+      {
+        "session_id": "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+        "cause_prompt": 17,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 19,
+                "step": 1,
+                "note": "After replacing the pseudo-element with a real DOM element, the user reported that it existed in the DOM but was visually invisible.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 1.0
+          }
+        ]
+      },
+      {
+        "session_id": "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+        "cause_prompt": 19,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 21,
+                "step": 1,
+                "note": "After enlarging the ring and declaring it visible, the user reported that it was still not visible and requested browser-based investigation.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 1.0
+          }
+        ]
+      },
+      {
+        "session_id": "8209f1c2-ccba-4dd6-8b9e-8d6d142183e2",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 9,
+                "step": 1,
+                "note": "The user reports that a remediation run ended with a git checkout/pathspec failure after the earlier implementation had been declared complete.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+        "cause_prompt": 60,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 67,
+                "step": 1,
+                "note": "After the release-scanning/component fix was treated as the solution, the user reports that the newly generated release PR has a nonsensical changelog containing historical changes.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108",
+        "cause_prompt": 21,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 23,
+                "step": 1,
+                "note": "The user reports that the go-run version of the script fails because Go cannot find a main module when invoked from the temporary repository.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+        "cause_prompt": 4,
+        "cause_kind": "system",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 5,
+                "step": 1,
+                "note": "The user reports that the Build job is still failing after the agent had declared the PR fixes complete and pushed.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 5,
+                "step": 3,
+                "note": "The CI log shows the concrete missing-module build failure for @cipherbox/core.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          }
+        ]
+      },
+      {
+        "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+        "cause_prompt": 5,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 1,
+                "note": "The user reports a new CI Test failure on coverage after the agent had announced the Build-job fix was pushed.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 6,
+                "step": 5,
+                "note": "The CI log identifies the api-client coverage threshold failure caused by zero tests.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 10,
+                "step": 1,
+                "note": "The user reports that CI Build is still failing after the prior Build-job fix was announced as complete.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 10,
+                "step": 2,
+                "note": "The CI log shows a distinct downstream type-declaration failure because the package builds were running in parallel.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      },
+      {
+        "session_id": "86b49c3d-e77b-496e-bd51-f00fca1f5c25",
+        "cause_prompt": 2,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 17,
+                "step": 1,
+                "note": "The user reported that the push failed because the S603 artifact was stale at 79 entries while the codebase required 81.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      }
+    ],
+    "not_enough_verification:not-tested": [
+      {
+        "session_id": "01d8797c-6704-43c1-8d9a-ee67f0bfbf0b",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 4,
+                "note": "The agent declared the frontend change done without any test run or other verification evidence in the session.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 1,
+                "note": "After the earlier implementation had been treated as complete, the user reported a ClickHouse aggregate-alias error that required the agent to edit the API query.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.93
+          }
+        ]
+      },
+      {
+        "session_id": "80a57739-bc39-40ff-a01f-13e02a86387d",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 6,
+                "note": "The agent declares the model ID and alias change done after only editing configuration files; no functional test or service-level verification is shown.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 9,
+                "step": 5,
+                "note": "The agent commits the changes without running tests or exercising the OpenClaw-to-CliProxyAPI model-resolution path.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "aa1f4450-d345-4b91-af6e-87dae650101e",
+        "cause_prompt": 8,
+        "cause_kind": "system",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 83,
+                "note": "A large API-route refactor and related QA changes were treated as committed after hook checks, without endpoint-level tests or manual requests validating the changed routes.",
+                "prompt_kind": "system"
+              }
+            ],
+            "confidence": 0.9
+          }
+        ]
+      },
+      {
+        "session_id": "aa1f4450-d345-4b91-af6e-87dae650101e",
+        "cause_prompt": 22,
+        "cause_kind": "system",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 22,
+                "step": 184,
+                "note": "The desktop and mobile sidebar icon replacement was committed after lint and hook checks, without a post-fix browser inspection confirming the new icons appeared in both sidebars.",
+                "prompt_kind": "system"
+              }
+            ],
+            "confidence": 0.9
+          }
+        ]
+      },
+      {
+        "session_id": "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+        "cause_prompt": 8,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 5,
+                "note": "The agent declared the new sandbox-agent-user-isolation.md document created, with no subsequent validation of its instructions or examples.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "046e7195-6950-42b2-8f28-4428d398952f",
+        "cause_prompt": 2,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 2,
+                "step": 50,
+                "note": "The only verification shown for the contract and executor changes is successful module imports, not a dedicated test or execution of the review/enforcement behavior.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 2,
+                "step": 51,
+                "note": "The agent treats the contract-enforcement implementation as complete and summarizes it as tightened despite having performed only import checks.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          }
+        ]
+      },
+      {
+        "session_id": "526f2e99-089f-466b-98d7-566241baabab",
+        "cause_prompt": 18,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 18,
+                "step": 4,
+                "note": "The agent said the CLAUDE.md memory guidelines were updated without rereading the file or otherwise verifying the resulting documentation change.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.72
+          }
+        ]
+      },
+      {
+        "session_id": "60639794-6077-4e88-a4d3-70aa566f1233",
+        "cause_prompt": 12,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 12,
+                "step": 7,
+                "note": "The agent declares both session-start files updated and presents the revised load sequence, but does not test either command or verify that all referenced paths and files work.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "60639794-6077-4e88-a4d3-70aa566f1233",
+        "cause_prompt": 13,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 13,
+                "step": 14,
+                "note": "The agent declares both projects committed after adding the README content and documentation changes, with no subsequent validation of the README, repository state, JSON, or workflow behavior.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.95
+          }
+        ]
+      },
+      {
+        "session_id": "fb62ccae-10b3-42a6-9361-cc731ad07f4e",
+        "cause_prompt": 2,
+        "cause_kind": "system",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 2,
+                "step": 94,
+                "note": "The agent declares TypeScript and Go checks clean after running only the compiler/type checker, without running dedicated tests or exercising the implemented UI and printing flow.",
+                "prompt_kind": "system"
+              },
+              {
+                "prompt": 6,
+                "step": 41,
+                "note": "After self-review fixes, the agent again reports completion after only TypeScript and Go build checks; no behavioral or manual verification is shown.",
+                "prompt_kind": "system"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      }
+    ],
+    "not_enough_verification:ask-for-manual-testing": [
+      {
+        "session_id": "3d1f9b25-a19d-4f1b-a8d0-a7c32eeec8bc",
+        "cause_prompt": 2,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 2,
+                "step": 9,
+                "note": "The agent says the command is now ready to test and that it added the registration, but no verification command or test run appears afterward.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          },
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 2,
+                "step": 9,
+                "note": "The agent directs the user to run `go run ./cmd/entire attach <session-id>` and obtain a real Claude session ID to test the change.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          }
+        ]
+      },
+      {
+        "session_id": "ce380f30-6ea0-4c76-93d3-ea24e6cc2f6e",
+        "cause_prompt": 7,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 7,
+                "step": 22,
+                "note": "The revised --resume implementation is described as the solution and ready for use, but no agent-run verification appears afterward.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 7,
+                "step": 22,
+                "note": "The agent explicitly asks the user to restart the backend and manually test follow-up-question session continuity.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 1.0
+          }
+        ]
+      },
+      {
+        "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+        "cause_prompt": 76,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 76,
+                "step": 12,
+                "note": "The agent again asks the user to inspect the staging VPS manually after its SSH authentication attempts fail.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108",
+        "cause_prompt": 20,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 20,
+                "step": 32,
+                "note": "The agent asks the user to rebuild the CLI and run the end-to-end test again to investigate missing attribution.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "2026-01-28-0276a600-2f22-4d2b-844c-3feb9c5aa108",
+        "cause_prompt": 24,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 24,
+                "step": 32,
+                "note": "The agent asks the user to run the test again so the newly added debugging output can reveal why attribution is missing.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "38df405e-e626-45ce-aba4-fe921af77dd8",
+        "cause_prompt": 13,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 13,
+                "step": 14,
+                "note": "After pushing the changes, the agent tells the user they are ready to test /repo-onboard on a new repository.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.93
+          }
+        ]
+      },
+      {
+        "session_id": "b9561101-d5e5-4463-989b-d8c56e5e4fcc",
+        "cause_prompt": 11,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 20,
+                "note": "The agent declared the Mermaid fix complete after lint checks, but did not run Zenn preview or a Mermaid renderer to verify that the diagram actually displayed.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 20,
+                "note": "The agent said both diagrams 'should' display and suggested using Zenn preview, which clearly implies it had not verified the rendering itself.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          },
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 20,
+                "note": "The agent explicitly told the user to confirm the result with `npx zenn preview` instead of performing that verification.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      }
+    ],
+    "not_enough_specification:self-report": [
+      {
+        "session_id": "80a57739-bc39-40ff-a01f-13e02a86387d",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 16,
+                "note": "The agent announces a concrete implementation to add `openrouter/free` even though no user implementation request or detailed requirement is visible in the preceding timeline.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.66
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 30,
+                "note": "The agent says the user's intent 'seems to be' about a last-resort fallback, explicitly signaling that it is proceeding from an interpretation rather than a confirmed specification.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.76
+          }
+        ]
+      },
+      {
+        "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+        "cause_prompt": 45,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 45,
+                "step": 2,
+                "note": "The agent explicitly notes that the request to make a usage-guide note 'somewhere' is open-ended and chooses Neo without a user-specified location or ownership rule.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.88
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 45,
+                "step": 2,
+                "note": "The agent says the instruction is 'pretty open-ended' and reasons through several possible homes before selecting Neo.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+        "cause_prompt": 56,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 56,
+                "step": 3,
+                "note": "The user requests replacing 'oracle' with 'telos' without specifying whether historical data, graph identifiers, plans, or only active documentation should change.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.76
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 56,
+                "step": 3,
+                "note": "The agent calls the rename significant, considers asking for scope, and debates whether to modify historical journal and graph data before proceeding with its own interpretation.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.93
+          }
+        ]
+      },
+      {
+        "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+        "cause_prompt": 61,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 61,
+                "step": 2,
+                "note": "The agent explicitly notices the contradiction between the earlier instruction to rename later and the new request to execute all four steps, then says it must determine whether the rename should happen now.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "38df405e-e626-45ce-aba4-fe921af77dd8",
+        "cause_prompt": 6,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 3,
+                "note": "The agent explicitly questions what building preset:base means and recognizes uncertainty about whether to deliver it globally, ship it in the plugin, or generate it through a command.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 6,
+                "step": 7,
+                "note": "The agent states that unresolved delivery, template, and configuration decisions need clarification before proceeding.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 6,
+                "step": 8,
+                "note": "The agent tells the user there are unresolved decisions affecting preset:base and asks targeted questions to resolve them.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      },
+      {
+        "session_id": "526f2e99-089f-466b-98d7-566241baabab",
+        "cause_prompt": 6,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 11,
+                "note": "The agent explicitly says it should clarify what 'on the agent conversations' means and considers multiple possible placements, but proceeds by choosing its own interpretation.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          },
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 7,
+                "step": 1,
+                "note": "The user says they actually wanted the logs rendered as a nice terminal log, correcting the card-based rendering produced from the prior request.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "b47b9afc-1f96-485f-a173-019b6da28152",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 9,
+                "note": "The agent's reasoning says it needs to clarify severity, category, and naming decisions before proceeding confidently.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 1,
+                "step": 39,
+                "note": "The agent explicitly tells the user that it has two design decisions to clarify before writing the final plan.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 1,
+                "step": 40,
+                "note": "The agent asks the user to choose how to resolve the severity and observation-type design decisions.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      },
+      {
+        "session_id": "eb529204-a1f1-4a0a-9581-ef75bcbfffc8",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 4,
+                "step": 3,
+                "note": "The agent explicitly says it needs to clarify key decisions before proceeding, including the target storage provider and intended architecture.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 4,
+                "step": 4,
+                "note": "The agent begins a sequence of clarification questions because the initial request did not specify the storage target.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.86
+          }
+        ]
+      }
+    ],
+    "not_enough_specification:repetitive-requirements-fixes": [
+      {
+        "session_id": "6864ff97-5db6-4c77-9d56-2e75e89488a0",
+        "cause_prompt": 11,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 24,
+                "step": 1,
+                "note": "The user rejected the implemented circular download indicator as too large and asked for a more refined design.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 25,
+                "step": 1,
+                "note": "The user redirected the indicator design from a circle to a small horizontal progress bar beneath the icon.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.56
+          }
+        ]
+      },
+      {
+        "session_id": "80a57739-bc39-40ff-a01f-13e02a86387d",
+        "cause_prompt": 7,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 1,
+                "note": "The user rejects the agent's change of the model ID to `free` and explicitly requires the ID to remain `cliproxy/free`.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          }
+        ]
+      },
+      {
+        "session_id": "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+        "cause_prompt": 4,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 1,
+                "note": "The user corrects the prior local-provider setup, explicitly stating that Docker cannot be used and that the purpose is to reuse Claude Code's existing logged-in credentials.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          }
+        ]
+      },
+      {
+        "session_id": "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+        "cause_prompt": 6,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 7,
+                "step": 1,
+                "note": "The user corrects the proposed mount, copy, sync, and overlay workflow by pointing out that the restricted workspace should simply have its own repository.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "fe31c83e-f872-4bc0-bf1d-776dda23fe58",
+        "cause_prompt": 8,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 13,
+                "step": 1,
+                "note": "The user has to reiterate that the entire setup must use Claude Code's existing authentication rather than Anthropic API keys, after the created research documents retained API-key/Vault guidance.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      },
+      {
+        "session_id": "071a67b9-5a93-4a6b-bc14-41c2ba85574b",
+        "cause_prompt": 3,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 4,
+                "step": 1,
+                "note": "The user corrected the commit-message wording, stating that issue 236 should only be referenced and not closed.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          },
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 5,
+                "step": 1,
+                "note": "The user pointed out that not all language versions of the README had been modified.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "526f2e99-089f-466b-98d7-566241baabab",
+        "cause_prompt": 6,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 11,
+                "note": "The agent explicitly says it should clarify what 'on the agent conversations' means and considers multiple possible placements, but proceeds by choosing its own interpretation.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          },
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 7,
+                "step": 1,
+                "note": "The user says they actually wanted the logs rendered as a nice terminal log, correcting the card-based rendering produced from the prior request.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "781eb8d6-8104-41a8-9d75-778c1c92ce88",
+        "cause_prompt": 6,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 1,
+                "note": "The user explicitly required all Lefthook main and local configuration filename variants to be supported and asked to list them rather than loop through variants.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 8,
+                "step": 1,
+                "note": "The user repeated the same complete Lefthook filename requirement, indicating the preceding implementation did not reliably satisfy it.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.84
+          }
+        ]
+      },
+      {
+        "session_id": "d9f0a13a-2256-4ef2-a6ed-7fe605e55655",
+        "cause_prompt": 85,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 85,
+                "step": 18,
+                "note": "The user rejects the agent's custom version-ldflags approach and asks whether there is another way.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 85,
+                "step": 22,
+                "note": "The user explicitly redirects the implementation to use the existing tooling.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 85,
+                "step": 29,
+                "note": "The user clarifies that the build should be chained through the mise call and skipped when E2E_ENTIRE_BIN is set.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 85,
+                "step": 40,
+                "note": "The user again requests removing the custom build code, after the agent continues reasoning about the fallback implementation.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      },
+      {
+        "session_id": "eb529204-a1f1-4a0a-9581-ef75bcbfffc8",
+        "cause_prompt": 15,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "repetitive-requirements-fixes",
+            "evidence": [
+              {
+                "prompt": 16,
+                "step": 1,
+                "note": "The user points out that the proposed read-only backend cache does not account for users deleting skills and memories from the UI.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 17,
+                "step": 1,
+                "note": "The user repeats that UI deletion must remain supported after the agent's first response did not fully resolve the requirement.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.96
+          }
+        ]
+      }
+    ],
+    "not_enough_verification:self-report": [
+      {
+        "session_id": "1b3690fe-335f-4eaa-b364-6ebfef856e97",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 42,
+                "note": "The agent explicitly reported that one test was skipped intentionally because there was no real Podman socket available.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 1,
+                "step": 97,
+                "note": "In the completion summary, the agent again stated that one test was skipped because no socket was available in CI.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "7fc60e9d-6935-419a-bff1-51419f079e47",
+        "cause_prompt": 5,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 5,
+                "step": 83,
+                "note": "The agent declares the fix ready while explicitly stating that hot reload did not apply the API changes and that the GUI must be restarted before the result can take effect.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.86
+          }
+        ]
+      },
+      {
+        "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+        "cause_prompt": 9,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 10,
+                "step": 83,
+                "note": "The agent explicitly says that API metrics comparison and load tests had not yet been done, despite having already pushed the implementation and presented it as ready.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          },
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 9,
+                "step": 18,
+                "note": "The agent tells the user to start Someguy and manually run curl tests for its health, IPNS, and providers endpoints.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          },
+          {
+            "subcategory": "repetitive-bug-fixes",
+            "evidence": [
+              {
+                "prompt": 55,
+                "step": 5,
+                "note": "After the initial Someguy configuration was presented as corrected and successfully tested, staging revealed that the container was crash-looping because SOMEGUY_LIBP2P_MAX_MEMORY was set to the invalid value 1GB.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "0c3182b1-f294-4fb1-8426-5274385ded0f",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 42,
+                "note": "The agent states that no engine test exists and proposes relying on file-finder tests to validate the engine behavior.",
+                "prompt_kind": "real"
+              },
+              {
+                "prompt": 1,
+                "step": 61,
+                "note": "The agent declares all three fixes implemented and verified despite having no dedicated engine test or manual reproduction.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 42,
+                "note": "The agent explicitly says that no engine test file exists, revealing that the primary engine-path fix was not directly tested.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.82
+          }
+        ]
+      },
+      {
+        "session_id": "43c87127-491b-488e-a553-95aa3f0414ac",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 8,
+                "step": 11,
+                "note": "The agent explicitly states that integration tests were not run because the user interrupted the tool request.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "86b49c3d-e77b-496e-bd51-f00fca1f5c25",
+        "cause_prompt": 9,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 15,
+                "step": 2,
+                "note": "The agent explicitly stated that commitlint did not validate the commit locally and that CI would perform the validation later.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      },
+      {
+        "session_id": "b9561101-d5e5-4463-989b-d8c56e5e4fcc",
+        "cause_prompt": 11,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "not-tested",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 20,
+                "note": "The agent declared the Mermaid fix complete after lint checks, but did not run Zenn preview or a Mermaid renderer to verify that the diagram actually displayed.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.98
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 20,
+                "note": "The agent said both diagrams 'should' display and suggested using Zenn preview, which clearly implies it had not verified the rendering itself.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.94
+          },
+          {
+            "subcategory": "ask-for-manual-testing",
+            "evidence": [
+              {
+                "prompt": 11,
+                "step": 20,
+                "note": "The agent explicitly told the user to confirm the result with `npx zenn preview` instead of performing that verification.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.99
+          }
+        ]
+      }
+    ],
+    "not_enough_specification:no-spec-detected": [
+      {
+        "session_id": "80a57739-bc39-40ff-a01f-13e02a86387d",
+        "cause_prompt": 1,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 16,
+                "note": "The agent announces a concrete implementation to add `openrouter/free` even though no user implementation request or detailed requirement is visible in the preceding timeline.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.66
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 1,
+                "step": 30,
+                "note": "The agent says the user's intent 'seems to be' about a last-resort fallback, explicitly signaling that it is proceeding from an interpretation rather than a confirmed specification.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.76
+          }
+        ]
+      },
+      {
+        "session_id": "aa1f4450-d345-4b91-af6e-87dae650101e",
+        "cause_prompt": 6,
+        "cause_kind": "system",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 6,
+                "step": 1,
+                "note": "The request asks the agent to make the beta product polished and launch-ready but provides no concrete acceptance criteria or definition of which issues must be fixed.",
+                "prompt_kind": "system"
+              },
+              {
+                "prompt": 7,
+                "step": 64,
+                "note": "The agent makes a subjective terminology decision that \u201cVideos\u201d should become \u201cContent\u201d or \u201cMeetings\u201d without a product specification establishing the intended label.",
+                "prompt_kind": "system"
+              },
+              {
+                "prompt": 7,
+                "step": 69,
+                "note": "The agent decides to synchronize navigation and remove or change routes based on code inspection rather than an explicit requirement for the desired information architecture.",
+                "prompt_kind": "system"
+              }
+            ],
+            "confidence": 0.58
+          }
+        ]
+      },
+      {
+        "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+        "cause_prompt": 45,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 45,
+                "step": 2,
+                "note": "The agent explicitly notes that the request to make a usage-guide note 'somewhere' is open-ended and chooses Neo without a user-specified location or ownership rule.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.88
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 45,
+                "step": 2,
+                "note": "The agent says the instruction is 'pretty open-ended' and reasons through several possible homes before selecting Neo.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.97
+          }
+        ]
+      },
+      {
+        "session_id": "cd680c64-9724-4fd5-a7dd-f0a396efb0eb",
+        "cause_prompt": 56,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 56,
+                "step": 3,
+                "note": "The user requests replacing 'oracle' with 'telos' without specifying whether historical data, graph identifiers, plans, or only active documentation should change.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.76
+          },
+          {
+            "subcategory": "self-report",
+            "evidence": [
+              {
+                "prompt": 56,
+                "step": 3,
+                "note": "The agent calls the rename significant, considers asking for scope, and debates whether to modify historical journal and graph data before proceeding with its own interpretation.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.93
+          }
+        ]
+      },
+      {
+        "session_id": "d9f0a13a-2256-4ef2-a6ed-7fe605e55655",
+        "cause_prompt": 52,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 52,
+                "step": 1,
+                "note": "The user asks to remove magic numbers but does not specify which constants, naming convention, or desired scope, and the agent proceeds directly.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.48
+          }
+        ]
+      },
+      {
+        "session_id": "d9f0a13a-2256-4ef2-a6ed-7fe605e55655",
+        "cause_prompt": 76,
+        "cause_kind": "real",
+        "findings": [
+          {
+            "subcategory": "no-spec-detected",
+            "evidence": [
+              {
+                "prompt": 76,
+                "step": 1,
+                "note": "The user asks to raise the timeout for one test but does not specify a target duration; the agent chooses 120 seconds without asking.",
+                "prompt_kind": "real"
+              }
+            ],
+            "confidence": 0.72
+          }
+        ]
+      }
+    ]
+  },
+  "timing": {
+    "download_total_s": 28.109993543002133,
+    "parse_total_s": 0.06144270900176707,
+    "total_wall_clock_s": 1512.7148392510026,
+    "call_total_s_by_call": {
+      "not_enough_verification": 726.9155992510118,
+      "not_enough_specification": 494.28710857901376,
+      "no_visual_reference": 262.8569059590118
+    },
+    "call_count_by_call": {
+      "not_enough_verification": 79,
+      "not_enough_specification": 79,
+      "no_visual_reference": 79
+    },
+    "prompt_chars_total_by_call": {
+      "not_enough_verification": 6172763,
+      "not_enough_specification": 6192592,
+      "no_visual_reference": 6017686
+    }
+  },
+  "judge_model": "openai/gpt-5.6-luna",
+  "rendering_caps": {
+    "thinking_chars_per_block": 4000,
+    "assistant_text_chars": 4000,
+    "tool_result_chars": 600,
+    "user_message_chars": 2000
+  },
+  "scope_thresholds": {
+    "files_too_many": 8,
+    "turns_too_long": 150
+  },
+  "examples_per_key": 5,
+  "n_candidates": 4852,
+  "sample_requested": [
+    20,
+    60
+  ],
+  "sampling": [
+    "random",
+    "random"
+  ],
+  "sample_seed": [
+    20260809,
+    20260823
+  ],
+  "examples_seed": [
+    12345,
+    12345
+  ],
+  "merged_from": [
+    "results.json",
+    "results_60b.json"
+  ],
+  "n_source_files": 2
+}

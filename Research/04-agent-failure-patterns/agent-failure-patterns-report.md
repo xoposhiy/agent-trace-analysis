@@ -1,0 +1,78 @@
+# Three Failure Patterns in LLM Agent Sessions
+
+### A focused deep-dive on redundant exploration, forgotten branches, and loops
+
+---
+
+## Pattern 1 — Redundant exploration
+
+**What it is.** Redundant exploration means the agent does work it has already done, or work that cannot help: it re-reads the same files, re-runs the same commands, repeats searches, or tests far more than needed. The paper [*When Agents go Astray: Course-Correcting SWE Agents with PRMs*](https://arxiv.org/abs/2509.02360) [1] (the SWE-PRM system) describes these as trajectory-level errors such as redundant backtracking and re-executing actions that are already complete, and warns that they "waste compute, inflate latency, and risk exhausting the agent's budget" before the task is done. The deep-research paper [*RE-TRAC*](https://arxiv.org/abs/2602.02486) [2] blames the standard ReAct design, where each attempt runs alone and cannot reuse what other attempts already learned, so the same ground gets covered again and again.
+
+**How to detect it.** SWE-PRM [1] uses a Process Reward Model (PRM): a separate model that looks at the last few steps every *n* steps and gives feedback that names the specific problem, instead of vague criticism. The system [*Process-Centric Analysis of Agentic Software Systems*](https://arxiv.org/abs/2512.02393) [3] (called Graphectory) turns the raw log into a graph, where nodes are actions and edges link steps that follow each other or touch the same files, then runs pattern detection to find repetitive and backtracking shapes. Because the graph can be built while the agent runs, problems can be flagged live. Simpler engineering methods just count repeated tool calls with the same arguments.
+
+**How often, and what it costs.** The measurements are striking. The empirical study [*Understanding Code Agent Behaviour*](https://arxiv.org/abs/2511.00197) [4] found that failed runs are consistently longer than successful ones — for example, one agent's failed runs were 82.5% longer on the harder SWE-bench Verified set. It also found that 72–81% of trajectories *do* locate the correct file even when they fail, so the wasted effort happens at a deeper level, and the authors conclude that agents need stronger signals for when to give up on a dead path. The deep-research pipeline [*OpenResearcher*](https://arxiv.org/abs/2603.20278) [5] found failed runs used almost twice as many tool calls as successful ones (about 72 versus 38 on average), mostly from repeated searching, and concluded that failure comes "not from insufficient exploration, but rather from inefficient or misdirected search." The security benchmark [*CyberExplorer*](https://arxiv.org/abs/2602.08023) [6] found that dead-end runs cost between 2.6 and 4.6 times more interaction rounds, and up to about 5 times more money, than solved ones.
+
+**How to fix it.** SWE-PRM's [1] live, taxonomy-guided feedback raised the resolution rate on SWE-bench Verified from 40.0% to 50.6% — a gain of more than 10 points — while keeping trajectories about the same length, for roughly 20 cents extra per task. RE-TRAC [2] compresses each attempt into a short structured note of what was verified and what is still open, then feeds it into the next attempt, cutting tool calls and tokens round after round. Graphectory's [3] live monitoring with rollback improved resolution by between 6.9% and 23.5% on hard instances, with under 10 milliseconds of overhead, and fixed about 94% of persistently problematic cases.
+
+**A fix we can suggest to the user.** Once a monitor sees the agent re-reading the same files or repeating the same searches, it can tell the user plainly: "the agent has read these files several times and re-run these commands — it seems to be going in circles." The most useful suggestions are: (a) give the agent the exact file path or command directly, instead of letting it search and guess; (b) add that pointer to the project's navigation file (AGENTS.md / CLAUDE.md) so future sessions skip the same search; and (c) move the heavy, repetitive exploration into a subagent that has its own context, so the wasted steps never fill the main session. A simple tool-call budget — "stop after a set number of searches and report back" — also gives the user a clear off-switch.
+
+---
+
+## Pattern 2 — Forgotten branches
+
+**What it is.** A forgotten branch is a sub-goal, hypothesis, or path that the agent *says* it will explore, and then never does. [*RE-TRAC*](https://arxiv.org/abs/2602.02486) [2] gives the clearest name for it — "incomplete branch exploration" — and explains the cause: deep tasks need branching and backtracking, but the linear ReAct loop forces a single straight path, so planned side-branches drop out of mind as the trajectory grows. SWE-PRM [1] lists related coordination errors such as drifting away from the main task, chasing irrelevant sub-goals, and forgetting earlier results. The long-horizon benchmark [*The Long-Horizon Task Mirage?*](https://arxiv.org/abs/2604.11978) [8] (HORIZON) calls the extreme version *catastrophic forgetting*: the agent stops enforcing earlier task-critical rules because they have drifted out of its active context.
+
+**How to detect it.** RE-TRAC [2] finds incomplete branches by studying failed runs and comparing the success rate of a single attempt with the success rate of several attempts; the gap shows how much potential is being left on the table. HORIZON [8] uses a model-as-judge that reads the whole trajectory, picks the main failure type from a seven-part taxonomy, and points to the exact step where things broke. The diagnostic system [*Where LLM Agents Fail and How They Can Learn From Failures*](https://arxiv.org/abs/2509.25370) [7] (AgentDebug) instead hunts for the single earliest "critical" error, on the idea that fixing one root-cause mistake can flip a whole failing run into a success.
+
+**How often, and what it costs.** This pattern produces the most memorable number in the whole literature. RE-TRAC [2] reports that up to **93% of failed deep-research trajectories** contain branches that were planned but never explored (93.0% for one model, 92.7% for another, 83.4% for a third, on the BrowseComp benchmark). HORIZON [8], after analysing more than 3,100 trajectories, found that as tasks get longer the mix of failures shifts toward planning and memory problems, with catastrophic forgetting at the core. AgentDebug [7] found that errors cluster in the middle of trajectories and that early memory and reflection mistakes spread forward into bad planning.
+
+**How to fix it.** RE-TRAC's [2] recursive note-taking re-surfaces the open branches in each new attempt and beats plain ReAct by 15–20% on BrowseComp. AgentDebug [7] re-runs the trajectory from the critical step it found, giving up to 26% better task success across three benchmarks. But there is an important warning here: the reliability study [*Beyond pass@1*](https://arxiv.org/abs/2603.29231) [9] found that simply bolting on a memory scratchpad can *hurt* long tasks — every model it tested did slightly worse at long horizons with a naive memory scaffold, because the extra bookkeeping eats into the step budget and the context. So memory must be designed with care, not just added.
+
+**A fix we can suggest to the user.** Because a forgotten branch is something the agent already named out loud and then dropped, a monitor can collect those dropped branches and show them back to the user: "the agent planned to check X and Y but never did — do you want it to follow up?" Practical suggestions are: (a) ask the agent to keep a short checklist or TODO list of open branches and tick them off, so plans do not drift out of context; (b) break a long task into smaller sub-tasks, since shorter runs forget less; and (c) offer to restart from the point where the branch was abandoned, rather than from the very beginning, so the lost idea gets a second chance.
+
+---
+
+## Pattern 3 — Loops
+
+**What it is.** A loop is when the agent repeats the same action-and-observation cycle, generates the same text again and again, or keeps going after it has already succeeded. SWE-PRM [1] names both "looping" and "termination unawareness," meaning the agent does not notice it is finished. The monitoring paper [*Monitor Degenerative Repetition in LLM Agents using Randomized FFT*](https://openreview.net/forum?id=xVO4BqmzVD) [10] (SpecRA) defines *degenerative repetition* as getting trapped in a recursive loop that produces near-identical output until the token limit is reached, and frames detection as looking for hidden periodicity (regular repeating cycles) in the stream of tokens.
+
+**How to detect it.** Loops have the widest range of detection methods, from very simple to fairly advanced:
+
+- *Fingerprint windows.* The paper [*Building Effective AI Coding Agents for the Terminal*](https://arxiv.org/abs/2603.05344) [11] turns each tool call into a short hash of its name plus arguments, keeps the last 20 in a sliding window, and if the same fingerprint shows up three times it injects a system warning and skips the call; if it keeps happening, it forces a hard pause for human approval. The authors note a key point: a model can ignore injected warning text, but it cannot get past a real execution halt.
+- *Simple rules.* Many production systems just block the third identical action in a row and force a different approach.
+- *Spectral (signal-based).* SpecRA [10] maps each token to a random complex number and uses a Fourier transform (FFT) to spot repeating cycles quickly. It analysed over 1.1 million real agent records, comes with a mathematical bound on false alarms, and recommends a stricter setting for coding agents. It is robust even when the repetition is approximate rather than exact, where word-matching methods fail.
+- *Activation-based.* The system [*Breaking the Loop*](https://arxiv.org/abs/2503.00416) [12] (RecurrentDetector) watches the model's internal activations and stops when consecutive states become more than 95% similar, reaching 95.2% accuracy at very low latency — but it only works on open models where the internals are visible, not on closed APIs. The reasoning model [*Pangu Embedded*](https://arxiv.org/abs/2505.22375) [13] uses an efficient local n-gram check with a similarity threshold.
+
+**How often, and what it costs.** SpecRA [10] flagged 813 repetitive samples out of more than 1.1 million traces — about 0.07% — so true degenerative loops are rare in absolute terms, but when they happen they can burn the entire token budget on nothing. CyberExplorer [6] links looping and stubborn persistence to the same expensive dead-end runs noted above, with one model showing extreme "persistence" that produced very long, very costly trajectories.
+
+**How to fix it.** A Process Reward Model (SWE-PRM [1]) can catch loops and non-termination as they form. The terminal-agent harness [11] uses its two-step escalation: first a warning, then a hard stop. Beyond that, the standard safety net is a set of hard limits — a maximum number of steps, a cost ceiling, and a time-out — together with clear, unambiguous "success" signals so the agent knows when to stop.
+
+**A fix we can suggest to the user.** Loops are the easiest pattern to surface in real time. When the same action repeats, the monitor can pause and ask the user directly: "the agent has tried this same step three times and seems stuck — do you want to stop it, give it a hint, or let it try a different approach?" Other helpful suggestions are: (a) set hard limits up front (a maximum number of steps, a cost ceiling, and a time-out) so a loop cannot run away; and (b) give the agent a clearer definition of "done", since many loops come from the agent not realising it has already finished.
+
+---
+
+## How the three patterns connect
+
+These three patterns are not separate problems with separate causes. They share one root: as a trajectory gets longer, the agent's sense of "what have I already done and what am I still trying to do" gets weaker. A forgotten branch leaves a goal unfinished, which invites repeated, redundant searching, which can settle into a loop. This is why the most effective new methods work at the level of the *whole process*: Graphectory [3] models the trajectory as a graph and detects all three shapes at once; SWE-PRM [1] gives live feedback against a taxonomy that covers redundancy, drift, and looping together; and RE-TRAC [2] attacks forgotten branches and redundant exploration with the same compressed-memory idea. For anyone building a monitor today, the practical order is clear: first log trajectory length and repeated tool calls so the patterns become visible, then add a cheap loop detector with hard limits, and only then invest in a process reward model or graph monitor for deeper course-correction.
+
+---
+
+## References
+
+1. Gandhi, S., Tsay, J., Ganhotra, J., Kate, K., & Rizk, Y. (2025). *When Agents go Astray: Course-Correcting SWE Agents with PRMs* (SWE-PRM). NeurIPS 2025 Workshop on Scaling Environments for Agents. https://arxiv.org/abs/2509.02360
+2. Zhu, J., et al. (2026). *RE-TRAC: Recursive Trajectory Compression for Deep Search Agents.* arXiv:2602.02486. https://arxiv.org/abs/2602.02486
+3. Liu, S., Chen, Y., Krishna, R., Sinha, S., Ganhotra, J., & Jabbarvand, R. (2026). *Process-Centric Analysis of Agentic Software Systems* (Graphectory). Proc. ACM Programming Languages (OOPSLA). https://arxiv.org/abs/2512.02393
+4. Majgaonkar, O., et al. (2026). *Understanding Code Agent Behaviour: An Empirical Study of Success and Failure Trajectories.* ICSE 2026. https://arxiv.org/abs/2511.00197
+5. *OpenResearcher: A Fully Open Pipeline for Long-Horizon Deep Research Trajectory Synthesis* (2026). arXiv:2603.20278. https://arxiv.org/abs/2603.20278
+6. *CyberExplorer: Benchmarking LLM Offensive Security Capabilities in a Real-World Attacking Simulation Environment* (2026). arXiv:2602.08023. https://arxiv.org/abs/2602.08023
+7. Zhang, et al. (2025). *Where LLM Agents Fail and How They Can Learn From Failures* (AgentDebug). arXiv:2509.25370. https://arxiv.org/abs/2509.25370
+8. Wang, X. J., et al. (2026). *The Long-Horizon Task Mirage? Diagnosing Where and Why Agentic Systems Break* (HORIZON). arXiv:2604.11978. https://arxiv.org/abs/2604.11978
+9. *Beyond pass@1: A Reliability Science Framework for Long-Horizon LLM Agents* (2026). arXiv:2603.29231. https://arxiv.org/abs/2603.29231
+10. Lai, H. (under review, ICLR 2026). *Monitor Degenerative Repetition in LLM Agents using Randomized FFT* (SpecRA). OpenReview. https://openreview.net/forum?id=xVO4BqmzVD
+11. *Building Effective AI Coding Agents for the Terminal: Scaffolding, Harness, Context Engineering, and Lessons Learned* (2026). arXiv:2603.05344. https://arxiv.org/abs/2603.05344
+12. Yu, et al. (2025). *Breaking the Loop: Detecting and Mitigating Denial-of-Service Vulnerabilities in Large Language Models* (RecurrentDetector). arXiv:2503.00416. https://arxiv.org/abs/2503.00416
+13. *Pangu Embedded: An Efficient Dual-system LLM Reasoner with Metacognition* (2025). arXiv:2505.22375. https://arxiv.org/abs/2505.22375
+14. Cemri, M., Pan, M. Z., Yang, S., Agrawal, L. A., et al. (2025). *Why Do Multi-Agent LLM Systems Fail?* (MAST). NeurIPS 2025 Datasets & Benchmarks Track. https://arxiv.org/abs/2503.13657
+15. Deshpande, D., Gangal, V., Mehta, H., Krishnan, J., Kannappan, A., & Qian, R. (2025). *TRAIL: Trace Reasoning and Agentic Issue Localization.* arXiv:2505.08638. https://arxiv.org/abs/2505.08638
+
+---
