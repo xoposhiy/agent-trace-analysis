@@ -220,6 +220,16 @@ class Event:
     # ``analysis.pricing``.
     attributed_cost: float = 0.0
 
+    # This Event's share of its OWN THREAD's *current* context window — the
+    # real, bounded size of that thread's last call (``fresh + cached``), not
+    # a cross-call sum. Answers a different question from the two fields
+    # above: not "what did this cost over the whole session" (cumulative,
+    # unbounded) but "what does the context look like right now" (a
+    # snapshot). Never mixed across threads: a subagent's own context window
+    # is separate from its parent's. See ``analysis.attribution`` and
+    # DESIGN.md §7.
+    context_tokens: int = 0
+
     @property
     def is_subagent(self) -> bool:
         return self.agent_id is not None
@@ -244,6 +254,7 @@ class Event:
             "attributed_tokens": self.attributed_tokens,
             "attributed_cache_read": self.attributed_cache_read,
             "attributed_cost": self.attributed_cost,
+            "context_tokens": self.context_tokens,
         }
 
 
@@ -344,6 +355,18 @@ class Block:
         return sum(e.attributed_cost for e in self.events)
 
     @property
+    def context_tokens(self) -> int:
+        """This block's share of its own thread's CURRENT context window.
+
+        Unlike ``attributed_total`` (cumulative across the whole session),
+        this is bounded by one real call's actual billed size — see
+        ``Event.context_tokens`` and DESIGN.md §7. A subagent band folds in
+        that subagent's own thread-scoped share alongside its spawning
+        call's, the same convention ``attributed_total`` already uses.
+        """
+        return sum(e.context_tokens for e in self.events)
+
+    @property
     def content_tokens(self) -> int:
         """Measured size of this block's own content. See ``Event``.
 
@@ -389,6 +412,7 @@ class Block:
             "attributed_cache_read": self.attributed_cache_read,
             "attributed_total": self.attributed_total,
             "attributed_cost": self.attributed_cost,
+            "context_tokens": self.context_tokens,
             "content_tokens": self.content_tokens,
             "content_tokens_measured": self.content_tokens_measured,
             "content_tokens_countable": self.content_tokens_countable,
@@ -507,6 +531,18 @@ class Session:
         return sum(e.attributed_cost for e in self.events)
 
     @property
+    def context_window_tokens(self) -> int:
+        """The MAIN thread's current context window — one real call's size.
+
+        Main-thread events only (``agent_id is None``): a subagent's context
+        window is a separate, isolated window on its own call sequence, and
+        summing it in here would silently reintroduce the same cross-call
+        double counting this figure exists to avoid. See DESIGN.md §7 and
+        ``analysis.attribution``.
+        """
+        return sum(e.context_tokens for e in self.events if e.agent_id is None)
+
+    @property
     def tool_calls(self) -> list[Event]:
         return [e for e in self.events if e.type == EV_TOOL_USE]
 
@@ -537,6 +573,7 @@ class Session:
             "duration_s": self.duration_s,
             "tokens": self.tokens.as_dict(),
             "attributed_cost": self.attributed_cost,
+            "context_window_tokens": self.context_window_tokens,
             "message_count": len(self.events),
             "tool_call_count": len(self.tool_calls),
             "subagent_count": len(self.subagent_ids),

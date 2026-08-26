@@ -73,9 +73,15 @@ CACHE_DIR = Path(
     os.environ.get("TRACELENS_CACHE_DIR", Path.home() / ".cache" / "tracelens")
 )
 
-# Seconds before giving up on the LLM. The proxy needs VPN; without it calls
-# hang ~16s. A short timeout keeps the UI responsive and falls back cleanly.
-LLM_TIMEOUT_S = float(os.environ.get("TRACELENS_LLM_TIMEOUT", "20"))
+# Seconds before giving up on the LLM. Started at 20 — enough for the VPN-down
+# case (calls hang ~16s with no VPN) and for a fast model like
+# claude-haiku-4-5. A reasoning model changes the shape of the problem: timed
+# real judge calls against ``openai/gpt-5.6-luna`` on 2026-08-25 ranged 7-40s
+# and one legitimately needed 62s, all well past 20s. A judge call that times
+# out is indistinguishable here from one that was never asked, so a timeout
+# this short was silently discarding real answers, not just falling back
+# cleanly.
+LLM_TIMEOUT_S = float(os.environ.get("TRACELENS_LLM_TIMEOUT", "60"))
 
 
 def llm_diagnostics() -> dict:
@@ -111,6 +117,30 @@ def llm_diagnostics() -> dict:
     }
 
 
+# --- chat completions ---------------------------------------------------
+#
+# Reasoning-style models (observed with ``openai/gpt-5.6-luna`` on the litellm
+# proxy here, same family as OpenAI's o-series) reject any ``temperature``
+# other than the default (1) with a 400. Every other model on the proxy
+# accepts an explicit ``temperature`` fine, so this only pays the retry cost
+# when the host actually objects, rather than hardcoding a model list that
+# would need updating for every future reasoning model.
+
+def chat_completion(client, *, model: str, messages: list, max_tokens: int,
+                     temperature: float | None = None):
+    """``client.chat.completions.create``, retried without ``temperature`` if rejected."""
+    kwargs = {"model": model, "max_tokens": max_tokens, "messages": messages}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as error:
+        if temperature is None or "temperature" not in str(error).lower():
+            raise
+        kwargs.pop("temperature")
+        return client.chat.completions.create(**kwargs)
+
+
 # --- live probe --------------------------------------------------------
 #
 # ``llm_diagnostics`` only reads configuration. Configuration can be perfectly
@@ -121,7 +151,11 @@ def llm_diagnostics() -> dict:
 #
 # The probe is the judge's own call shape (a chat completion against
 # ``JUDGE_MODEL``), so it exercises the key, the host, *and* the model name.
-# ``max_tokens=1`` keeps it to a token.
+# ``max_tokens=16`` keeps it cheap. It cannot be 1: reasoning-style models
+# (observed with ``openai/gpt-5.6-luna``) spend part of the token budget on
+# hidden reasoning tokens before any visible output, so ``max_tokens=1`` left
+# nothing for the answer and the probe always failed with "max_tokens...
+# reached" even though the model and key were both fine.
 
 # Deliberately shorter than LLM_TIMEOUT_S: this runs while someone waits for a
 # banner, not while a session is being classified.
@@ -193,9 +227,10 @@ def probe_llm(force: bool = False) -> dict:
 
         client = (OpenAI(base_url=LLM_BASE_URL, timeout=PROBE_TIMEOUT_S)
                   if LLM_BASE_URL else OpenAI(timeout=PROBE_TIMEOUT_S))
-        client.chat.completions.create(
+        chat_completion(
+            client,
             model=JUDGE_MODEL,
-            max_tokens=1,
+            max_tokens=16,
             temperature=0,
             messages=[{"role": "user", "content": "ping"}],
         )

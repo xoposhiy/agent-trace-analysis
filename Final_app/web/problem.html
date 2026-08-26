@@ -8,7 +8,10 @@
 </head>
 <body>
   <div class="wrap">
-    <a class="back" id="back" href="/">← back to the session</a>
+    <div class="back-row">
+      <a class="back" id="back" href="/">← back to the session</a>
+      <a class="back" href="/#problems">← back to problems</a>
+    </div>
 
     <div class="detail-head">
       <h2 id="title">Loading…</h2>
@@ -16,6 +19,20 @@
     </div>
 
     <div class="stats" id="stats"></div>
+
+    <div class="filters">
+      <div class="field">
+        <label for="f-metric">Y axis</label>
+        <select id="f-metric">
+          <option value="cost">retrospective cost</option>
+          <option value="context" selected>context window</option>
+          <option value="time">time</option>
+          <option value="messages">messages</option>
+        </select>
+      </div>
+      <span class="metric-total" id="metric-total"></span>
+      <span class="spacer"></span>
+    </div>
 
     <div class="problem-stage">
       <div class="bar-col">
@@ -28,6 +45,8 @@
       </div>
       <div>
         <div id="tip" class="tip tip-empty">Hover a block</div>
+        <div class="stats" id="problem-stats"></div>
+        <div id="problem-chunks"></div>
         <p id="detail" class="row-detail"></p>
         <p id="justification" class="row-justification"></p>
       </div>

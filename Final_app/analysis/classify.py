@@ -25,7 +25,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from Final_app.config import CACHE_DIR, JUDGE_MODEL, LLM_BASE_URL, LLM_TIMEOUT_S
+from Final_app.config import CACHE_DIR, JUDGE_MODEL, LLM_BASE_URL, LLM_TIMEOUT_S, chat_completion
 from Final_app.ir.models import (
     COORDINATION,
     EV_ASSISTANT,
@@ -253,7 +253,8 @@ def judge_calls(calls: list[Event]) -> dict[str, tuple[str, float]]:
 
         client = (OpenAI(base_url=LLM_BASE_URL, timeout=LLM_TIMEOUT_S)
                   if LLM_BASE_URL else OpenAI(timeout=LLM_TIMEOUT_S))
-        response = client.chat.completions.create(
+        response = chat_completion(
+            client,
             model=JUDGE_MODEL,
             max_tokens=min(4000, 60 * len(calls) + 200),
             temperature=0,

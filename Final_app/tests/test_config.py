@@ -64,6 +64,63 @@ def install_fake_openai(monkeypatch: pytest.MonkeyPatch, on_call):
 
 
 # ----------------------------------------------------------------------
+# chat_completion: the temperature-rejection retry
+# ----------------------------------------------------------------------
+#
+# Reasoning-style models (``openai/gpt-5.6-luna`` on the litellm proxy here)
+# 400 on any ``temperature`` but the default. Verified live against the proxy
+# 2026-08-25: "Unsupported value: 'temperature' does not support 0 with this
+# model. Only the default (1) value is supported."
+
+def test_temperature_is_sent_when_the_model_accepts_it(monkeypatch: pytest.MonkeyPatch):
+    calls = install_fake_openai(monkeypatch, lambda **kwargs: object())
+    from openai import OpenAI
+
+    client = OpenAI()
+    config.chat_completion(client, model="gpt-4o-mini", max_tokens=1,
+                            temperature=0, messages=[])
+
+    assert len(calls) == 1
+    assert calls[0]["temperature"] == 0
+
+
+def test_temperature_rejection_is_retried_without_it(monkeypatch: pytest.MonkeyPatch):
+    def on_call(**kwargs):
+        if "temperature" in kwargs:
+            raise ValueError(
+                "Unsupported value: 'temperature' does not support 0 with "
+                "this model. Only the default (1) value is supported."
+            )
+        return object()
+
+    calls = install_fake_openai(monkeypatch, on_call)
+    from openai import OpenAI
+
+    client = OpenAI()
+    result = config.chat_completion(client, model="openai/gpt-5.6-luna",
+                                     max_tokens=1, temperature=0, messages=[])
+
+    assert result is not None
+    assert len(calls) == 2, "first call (with temperature) plus the retry"
+    assert "temperature" not in calls[1]
+
+
+def test_a_non_temperature_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch):
+    def on_call(**kwargs):
+        raise ValueError("401 Unauthorized")
+
+    calls = install_fake_openai(monkeypatch, on_call)
+    from openai import OpenAI
+
+    client = OpenAI()
+    with pytest.raises(ValueError, match="401"):
+        config.chat_completion(client, model="gpt-4o-mini", max_tokens=1,
+                                temperature=0, messages=[])
+
+    assert len(calls) == 1, "an unrelated error must not trigger the retry"
+
+
+# ----------------------------------------------------------------------
 # Configuration inspection
 # ----------------------------------------------------------------------
 
@@ -115,15 +172,33 @@ def test_a_working_llm_probes_ok(monkeypatch: pytest.MonkeyPatch, configured):
     assert probe["model"] == config.JUDGE_MODEL
 
 
-def test_the_probe_asks_for_a_single_token(monkeypatch: pytest.MonkeyPatch,
-                                           configured):
+def test_the_probe_stays_cheap(monkeypatch: pytest.MonkeyPatch, configured):
     """A diagnostic that costs real money would not get run often enough."""
     calls = install_fake_openai(monkeypatch, lambda **kwargs: object())
     config.probe_llm()
 
     assert len(calls) == 1
-    assert calls[0]["max_tokens"] == 1
+    assert calls[0]["max_tokens"] == 16
     assert calls[0]["model"] == config.JUDGE_MODEL
+
+
+def test_the_probe_survives_a_reasoning_models_hidden_tokens(
+    monkeypatch: pytest.MonkeyPatch, configured
+):
+    """gpt-5.6-luna-style models spend budget on hidden reasoning tokens;
+    ``max_tokens=1`` starved them of any output and always failed."""
+    def on_call(**kwargs):
+        if kwargs.get("max_tokens", 0) < 16:
+            raise ValueError(
+                "Could not finish the message because max_tokens or model "
+                "output limit was reached."
+            )
+        return object()
+
+    install_fake_openai(monkeypatch, on_call)
+    probe = config.probe_llm()
+
+    assert probe["ok"] is True
 
 
 @pytest.mark.parametrize("error_name,message,expected", [
@@ -163,6 +238,21 @@ def test_a_timeout_blames_the_vpn(monkeypatch: pytest.MonkeyPatch, configured):
     probe = config.probe_llm()
 
     assert "VPN" in probe["hint"]
+
+
+def test_the_probe_survives_a_temperature_rejecting_model(
+    monkeypatch: pytest.MonkeyPatch, configured
+):
+    """gpt-5.6-luna-style models 400 on temperature=0; the probe must retry, not fail."""
+    def on_call(**kwargs):
+        if "temperature" in kwargs:
+            raise ValueError("temperature does not support 0 with this model")
+        return object()
+
+    install_fake_openai(monkeypatch, on_call)
+    probe = config.probe_llm()
+
+    assert probe["ok"] is True
 
 
 def test_an_unexpected_failure_still_reports_rather_than_raising(

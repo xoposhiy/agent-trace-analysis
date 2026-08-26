@@ -766,6 +766,190 @@ def test_a_session_with_no_cache_reads_attributes_none(claude_home: Path):
 
 
 # ----------------------------------------------------------------------
+# The context-window snapshot (DESIGN.md §7)
+# ----------------------------------------------------------------------
+# A different question from every test above: not "how much did this cost
+# across the whole session" (cumulative, unbounded) but "what does the
+# context look like right now" — bounded by one real call's actual billed
+# size, never a sum across calls.
+
+def test_context_window_is_the_last_calls_real_size_not_a_sum(claude_home: Path):
+    """The bug this fixes: the naive total inflates with every extra call
+    that re-reads the same content; this must not.
+
+    ``_resident_lines`` bills each later turn identically: cache_creation=50,
+    cache_read=20,000. The naive sum grows with ``calls`` (2 calls: 40,000;
+    20 calls: 400,000 — see ``test_every_cache_read_token_lands_on_a_block``
+    for the same pattern on the cumulative channel). The real last call is
+    always the same size regardless: fresh 50 + cached 20,000 = 20,050.
+    """
+    short = _loaded(claude_home, _resident_lines(calls=2, cache_read=20_000))
+    long = _loaded(claude_home, _resident_lines(calls=20, cache_read=20_000))
+
+    assert short.tokens.cache_read == 40_000
+    assert long.tokens.cache_read == 400_000
+
+    assert short.context_window_tokens == 20_050
+    assert long.context_window_tokens == 20_050
+
+
+def test_the_blocks_sum_exactly_to_the_context_window(claude_home: Path):
+    """The header stat and the bar's "context" axis must never disagree."""
+    session = _loaded(claude_home, _resident_lines(calls=6, cache_read=20_000))
+    blocks = build_blocks(session, use_judge=False)
+
+    assert sum(b.context_tokens for b in blocks) == session.context_window_tokens
+    assert session.context_window_tokens == 20_050
+
+
+def test_a_compaction_excludes_pre_compaction_content_from_the_window(
+    claude_home: Path
+):
+    """A block entirely before the most recent compaction holds none of the
+    current window — it is not part of what a next call would re-send —
+    even though it still holds real cumulative ``attributed_cache_read``."""
+    lines = [
+        user_line("u1", "read it", "2026-08-01T10:00:00.000Z"),
+        assistant_tool_line("a1", "msg1", "t1", "Read", {"file_path": "/repo/big.py"},
+                            "2026-08-01T10:00:01.000Z",
+                            input_tokens=100, output_tokens=40),
+        tool_result_line("r1", "t1", "(truncated)", "2026-08-01T10:00:02.000Z",
+                         envelope={"file": {"filePath": "/repo/big.py",
+                                            "numLines": 2000,
+                                            "content": "z" * 80_000}}),
+        assistant_text_line("a2", "msg2", "Still reading.", "2026-08-01T10:01:00.000Z",
+                            output_tokens=30, cache_creation=50, cache_read=10_000),
+        {"uuid": "c1", "timestamp": "2026-08-01T10:02:00.000Z",
+         "isCompactSummary": True},
+        assistant_tool_line("a3", "msg3", "t2", "Bash", {"command": "pytest -q"},
+                            "2026-08-01T10:03:00.000Z",
+                            output_tokens=30, cache_creation=50, cache_read=90_000),
+        tool_result_line("r2", "t2", "ok", "2026-08-01T10:03:30.000Z"),
+        assistant_text_line("a4", "msg4", "Green.", "2026-08-01T10:04:00.000Z",
+                            output_tokens=20, cache_creation=40, cache_read=90_000),
+    ]
+    session = _loaded(claude_home, lines)
+    blocks = build_blocks(session, use_judge=False)
+
+    read = next(b for b in blocks if b.kind == "read")
+
+    assert session.compaction_points, "the fixture must produce a compaction point"
+    assert read.attributed_cache_read > 0, "cumulative billing still owes the Read"
+    assert read.context_tokens == 0, \
+        f"a compacted-away Read should hold none of the current window," \
+        f" got {read.context_tokens}"
+
+
+def test_the_baseline_folds_into_blocks_proportionally_not_flatly(claude_home: Path):
+    """DESIGN.md §7 "the unowned baseline": the system prompt/tool-definition
+    share folds into whatever is resident in proportion to its own size, not
+    an even split. A third, later call is needed so BOTH the Read and the
+    Bash are actually resident by the end — with only two calls the second
+    one's own content never enters the snapshot at all, and the test would
+    pass for the wrong reason (an empty block, not a proportional one)."""
+    lines = [
+        user_line("u1", "hi", "2026-08-01T10:00:00.000Z"),
+        assistant_tool_line("a1", "msg1", "t1", "Read", {"file_path": "/repo/big.py"},
+                            "2026-08-01T10:00:01.000Z",
+                            input_tokens=100, output_tokens=40),
+        tool_result_line("r1", "t1", "(truncated)", "2026-08-01T10:00:02.000Z",
+                         envelope={"file": {"filePath": "/repo/big.py",
+                                            "numLines": 2000,
+                                            "content": "z" * 80_000}}),
+        assistant_tool_line("a2", "msg2", "t2", "Bash", {"command": "pytest -q"},
+                            "2026-08-01T10:00:03.000Z",
+                            output_tokens=10, cache_creation=200, cache_read=100),
+        # A few thousand characters of test output — big enough that its
+        # weight clears integer-rounding noise against the Read's 80,000, but
+        # still far smaller, so the ">9x" ratio below holds comfortably.
+        tool_result_line("r2", "t2", "F" * 4_000, "2026-08-01T10:00:04.000Z"),
+        assistant_text_line("a3", "msg3", "Done.", "2026-08-01T10:00:05.000Z",
+                            output_tokens=10, cache_creation=30, cache_read=3_000),
+    ]
+    session = _loaded(claude_home, lines)
+    blocks = build_blocks(session, use_judge=False)
+
+    read = next(b for b in blocks if b.kind == "read")
+    execute = next(b for b in blocks if b.kind == "execute")
+
+    assert read.context_tokens > 0 and execute.context_tokens > 0, \
+        "both blocks must actually be resident in the final snapshot"
+    assert read.context_tokens > 9 * execute.context_tokens, \
+        f"the much larger Read result ({read.context_tokens}) should absorb far" \
+        f" more of the baseline than Bash's tiny result ({execute.context_tokens})"
+
+
+def test_subagent_context_window_is_independent_of_the_main_threads(claude_home: Path):
+    """Each thread's window is its own last call — never summed together.
+
+    A subagent's context is a separate, isolated window on its own call
+    sequence; mixing it into the main thread's figure would reintroduce the
+    exact cross-call sum this feature exists to remove.
+    """
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    agent_id = "a0b679820a32f88c4"
+    project_dir = claude_home / PROJECT_SLUG
+
+    write_transcript(project_dir / f"{session_id}.jsonl", [
+        user_line("u1", "audit this repo", "2026-08-02T09:00:00.000Z"),
+        assistant_tool_line("a1", "msg1", "t1", "Agent",
+                            {"subagent_type": "Explore", "prompt": "find TODOs"},
+                            "2026-08-02T09:00:01.000Z",
+                            input_tokens=1000, output_tokens=50, cache_read=5000),
+        tool_result_line("r1", "t1", "done", "2026-08-02T09:00:30.000Z",
+                         envelope={"agentId": agent_id, "status": "completed"}),
+        assistant_text_line("a2", "msg2", "Found nothing.", "2026-08-02T09:00:31.000Z",
+                            output_tokens=20, cache_creation=60, cache_read=6000),
+    ])
+
+    sub_path = project_dir / session_id / "subagents" / f"agent-{agent_id}.jsonl"
+    write_transcript(sub_path, [
+        {"type": "user", "uuid": "s-u1", "parentUuid": None, "isSidechain": True,
+         "agentId": agent_id, "timestamp": "2026-08-02T09:00:02.000Z",
+         "message": {"role": "user", "content": "find TODOs"}},
+        {"type": "assistant", "uuid": "s-a1", "isSidechain": True,
+         "agentId": agent_id, "timestamp": "2026-08-02T09:00:10.000Z",
+         "message": {"id": "s-msg1", "role": "assistant", "model": "claude-opus-4-6",
+                     "content": [{"type": "tool_use", "id": "s-t1", "name": "Grep",
+                                  "input": {"pattern": "TODO"}}],
+                     "usage": {"input_tokens": 200, "output_tokens": 10}}},
+        {"type": "assistant", "uuid": "s-a2", "isSidechain": True,
+         "agentId": agent_id, "timestamp": "2026-08-02T09:00:20.000Z",
+         "message": {"id": "s-msg2", "role": "assistant", "model": "claude-opus-4-6",
+                     "content": [{"type": "tool_use", "id": "s-t2", "name": "Read",
+                                  "input": {"file_path": "/repo/a.py"}}],
+                     "usage": {"input_tokens": 0, "output_tokens": 10,
+                               "cache_creation_input_tokens": 300,
+                               "cache_read_input_tokens": 200}}},
+    ])
+
+    session = claude_code.load_session(PROJECT_SLUG, project_dir / f"{session_id}.jsonl")
+    session.overhead_tokens = attribute(session)
+
+    main_events = [e for e in session.events if e.agent_id is None]
+    sub_events = [e for e in session.events if e.agent_id == agent_id]
+
+    # Main thread's own last call (msg2): fresh 60 + cached 6,000 = 6,060.
+    assert session.context_window_tokens == 6_060
+    assert sum(e.context_tokens for e in main_events) == 6_060
+    # The subagent's own last call (s-msg2): fresh 300 + cached 200 = 500 —
+    # independent of, and unrelated in size to, the main thread's 6,060.
+    assert sum(e.context_tokens for e in sub_events) == 500
+
+
+def test_a_single_call_session_context_window_is_that_calls_whole_prompt(
+    claude_home: Path
+):
+    session = _loaded(claude_home, [
+        user_line("u1", "hello?", "2026-08-01T10:00:00.000Z"),
+        assistant_text_line("a1", "msg1", "Hi!", "2026-08-01T10:00:01.000Z",
+                            input_tokens=200, output_tokens=10, cache_read=50),
+    ])
+
+    assert session.context_window_tokens == 250  # fresh 200 + cached 50
+
+
+# ----------------------------------------------------------------------
 # The work per call is bounded
 # ----------------------------------------------------------------------
 

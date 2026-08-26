@@ -40,7 +40,13 @@ chunk, summing to P), then:
     cost    = base_cost_after_split(it, ot, cw, cr_tok) + oh
 Everything else (num_chunks / uniform_chunk_heights) is just the uniform-spaced helper.
 
-All dollar figures are token-based ESTIMATES at blended Anthropic rates.
+All dollar figures are token-based ESTIMATES. Every function below accepts a
+``rates`` override (default ``DEFAULT_RATES``, a flat blended-Opus-4.x guess);
+``analysis.plan_mode._rates_for_session`` builds the real per-model rate for
+whichever model actually ran the session and both real callers
+(``plan_mode.price_split``, ``task_forest.price_multi_split``) pass it in, so
+in practice this module is never priced at the flat default — see DESIGN.md
+§7's "chunk_split_model pricing" note for why that mattered.
 """
 import math
 from dataclasses import dataclass

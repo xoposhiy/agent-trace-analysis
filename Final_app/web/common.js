@@ -59,16 +59,21 @@ function formatDuration(seconds) {
 
 // --- token figures ----------------------------------------------------
 
-// One block's context-window cost, split the way `analysis.attribution` places
-// it. `working` is input, output and cache writes — what this block's own
-// content cost to put into the prompt. `cacheRead` is what every later call
-// paid to re-read it while it stayed resident, which for an early `Read` of a
-// big file is most of what it really cost.
+// One block's CUMULATIVE billed tokens across the whole session, split the
+// way `analysis.attribution` places it. `working` is input, output and
+// cache writes — what this block's own content cost to put into the prompt.
+// `cacheRead` is what every later call paid to re-read it while it stayed
+// resident, which for an early `Read` of a big file is most of what it
+// really cost.
 //
-// `total` is what the bar's token axis paints. The two channels are returned
-// separately because CLAUDE.md §7 forbids presenting their sum as work done —
-// cache reads are ~95% of a real session, so that reads ~18x high. Every caller
-// that shows `total` shows `tokenBreakdown` beside it.
+// `total` is what the bar's "tokens" axis paints, and it is unbounded — it
+// grows with every later call that re-reads this block's content, unlike
+// the separate, bounded `context_tokens` field (DESIGN.md §7, the "context"
+// axis and the session/agent header's "Context window" stat). The two
+// channels here are returned separately because CLAUDE.md §7 forbids
+// presenting their sum as work done — cache reads are ~95% of a real
+// session, so that reads ~18x high. Every caller that shows `total` shows
+// `tokenBreakdown` beside it.
 //
 // Falls back a step at a time, so a payload from before either channel existed
 // still renders a number rather than NaN.
@@ -101,7 +106,7 @@ function tokenFacts(split) {
 }
 
 function tokenBreakdown(split) {
-  return `${split.total.toLocaleString()} tokens of the session's context window`
+  return `${split.total.toLocaleString()} tokens billed to this block across the session`
     + ` · ${split.working.toLocaleString()} input, output and cache writes`
     + ` · ${split.cacheRead.toLocaleString()} re-read from cache by later calls`;
 }
@@ -138,4 +143,98 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function stat(key, value, title) {
+  const box = el('div');
+  box.appendChild(el('div', 'stat-k', key));
+  const valueNode = el('div', 'stat-v', value);
+  if (title) valueNode.title = title;
+  box.appendChild(valueNode);
+  return box;
+}
+
+// --- session-level header stats -----------------------------------------
+//
+// The exact stat row the session page leads with (DESIGN.md §7). Shared so
+// every page that shows "what is this session" — the session page itself,
+// and a detected problem's own page — agrees on the same numbers rather
+// than each computing its own slightly different version.
+function sessionStats(session) {
+  // "Context window" is the real, bounded size of the main thread's LAST
+  // call (`input + cache_read + cache_creation` for that one call) — not
+  // `session.tokens.total`, which sums `cache_read` across every call and so
+  // recounts the same resident content once per later call that re-read it
+  // (a real session here: 147M summed vs. 637K in the largest single call).
+  // See DESIGN.md §7 and `Session.context_window_tokens`.
+  const tokenStat = stat('Context window', formatNumber(session.context_window_tokens));
+  tokenStat.title = `${session.tokens.working.toLocaleString()} generated this session`
+    + ` (excludes cache reads) · in ${session.tokens.input.toLocaleString()}`
+    + ` · out ${session.tokens.output.toLocaleString()}`
+    + ` · cache write ${session.tokens.cache_creation.toLocaleString()}`
+    + ` · cache read, cumulative across every call ${session.tokens.cache_read.toLocaleString()}`;
+
+  // Sums to exactly the same figure as the bar underneath it — every block's
+  // `attributed_cost` added up — because both come from the one attribution
+  // pass in `analysis.attribution`. See `Session.attributed_cost`. This is
+  // cumulative across the WHOLE session, unlike "Context window" beside it,
+  // which is deliberately bounded to one call — the two are not meant to be
+  // compared 1:1, they answer different questions (what did this cost, vs.
+  // what does the context look like right now).
+  const costStat = stat('Retrospective cost', formatCost(session.attributed_cost));
+  costStat.title = 'Priced per call at Anthropic\'s rate for the model that call'
+    + ' actually ran on — an attribution across the session\'s blocks, summed'
+    + ' across every call this session ever made.';
+
+  return [
+    tokenStat,
+    costStat,
+    stat('Messages', formatNumber(session.message_count)),
+    stat('Tool calls', formatNumber(session.tool_call_count)),
+    stat('Subagents', String(session.subagent_count)),
+    stat('Duration', formatDuration(session.duration_s)),
+    stat('Compactions', String(session.compaction_points.length)),
+  ];
+}
+
+// --- the Y-axis total, next to the metric selector -----------------------
+//
+// The bar's Y axis answers a different question depending on the metric —
+// "context" is one bounded call, "cost"/"tokens" are cumulative across the
+// whole thread — and that difference is exactly the thing people get
+// confused about (DESIGN.md §7). So whichever metric is selected gets its
+// own total restated in plain language right next to the selector, instead
+// of leaving the reader to infer it from the bar's shape alone.
+//
+// ``subject`` is a Session (session.js/problem.js) or a subagent Block
+// (agent.js) — the two field names that differ between them
+// (`context_window_tokens` vs `context_tokens`) are both tried.
+function metricTotalText(subject, metric) {
+  const contextTokens = subject.context_window_tokens ?? subject.context_tokens ?? 0;
+
+  if (metric === 'context') {
+    return `${contextTokens.toLocaleString()} tokens — the real, bounded size`
+      + ` of this thread's last API call, not summed across every call.`;
+  }
+  if (metric === 'cost') {
+    // The cumulative token count belongs beside the dollar figure, not the
+    // "context" one above — both are the same "every call, re-billing
+    // included" shape, unlike the bounded, one-call context-window figure.
+    const totalTokens = (subject.tokens && subject.tokens.total) || 0;
+    return `${formatCost(subject.attributed_cost)} (${totalTokens.toLocaleString()} tokens)`
+      + ` — every token sent, including re-reads re-billed on every later API`
+      + ` call, priced at each call's real rate.`;
+  }
+  if (metric === 'time') {
+    return `${formatDuration(subject.duration_s)} — how long this thread ran,`
+      + ` start to last message.`;
+  }
+  if (metric === 'messages') {
+    return `${formatNumber(subject.message_count)} messages make up this thread.`;
+  }
+  return '';
+}
+
+function renderMetricTotal(container, subject, metric) {
+  container.textContent = metricTotalText(subject, metric);
 }

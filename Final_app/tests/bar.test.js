@@ -70,7 +70,7 @@ const C = context.constants;
 let nextId = 0;
 
 function block(kind, { tokens = 0, duration = 0, messages = 1,
-                       working, cacheRead, cost } = {}) {
+                       working, cacheRead, cost, context } = {}) {
   nextId += 1;
   const made = {
     id: nextId,
@@ -91,6 +91,12 @@ function block(kind, { tokens = 0, duration = 0, messages = 1,
   // opts into pricing exercises the "no price data yet" fallback.
   if (cost !== undefined) {
     made.attributed_cost = cost;
+  }
+  // The real, bounded context-window figure (DESIGN.md §7) — deliberately
+  // its own field, never derived from `working`/`cacheRead` above, since the
+  // whole point is that it is a different, smaller number.
+  if (context !== undefined) {
+    made.context_tokens = context;
   }
   return made;
 }
@@ -441,14 +447,31 @@ test('each metric reads its own field', () => {
   assert.strictEqual(blockMetric(b, 'money'), 12, 'unknown metric falls back to tokens');
 });
 
-test('the token metric is the whole context window, cache reads included', () => {
+test('the token metric is the whole CUMULATIVE billed total, cache reads included', () => {
   // A Read of a big file is cheap to issue and expensive to keep: on real
   // session e6e482e6 one `Read /tmp/tracelens.png` block was 6,999 working
   // tokens and 9,308,775 in later re-reads. Sizing by the working half alone
-  // drew that block as one of the smallest on the bar.
+  // drew that block as one of the smallest on the bar. This is unbounded —
+  // see the separate `context` metric below for the bounded figure.
   const b = block('read', { tokens: 12, working: 6999, cacheRead: 9308775 });
 
   assert.strictEqual(blockMetric(b, 'tokens'), 9315774);
+});
+
+test('the context metric reads context_tokens, a different field from tokens', () => {
+  // DESIGN.md §7: bounded by one real call's actual billed size, never a sum
+  // across calls, so it must not be derived from working/cacheRead at all.
+  const b = block('read', { tokens: 12, working: 6999, cacheRead: 9308775, context: 637 });
+
+  assert.strictEqual(blockMetric(b, 'context'), 637);
+  assert.notStrictEqual(blockMetric(b, 'context'), blockMetric(b, 'tokens'),
+    'context and tokens answer different questions and must not collapse to the same number');
+});
+
+test('the context metric falls back to 0 on an older payload', () => {
+  const noContextField = block('read', { tokens: 12, working: 6999, cacheRead: 9308775 });
+
+  assert.strictEqual(blockMetric(noContextField, 'context'), 0);
 });
 
 test('the token metric falls back a step at a time on older payloads', () => {

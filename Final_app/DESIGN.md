@@ -169,6 +169,11 @@ the session instead.
 
 Details and the reasoning behind each choice are in `analysis/attribution.py`.
 
+This bar/tokens axis and the block hover readout are **cumulative** —
+unbounded, since the same content is re-billed once per later call that
+re-reads it. The session header's own "Context window" stat, and the bar's
+separate "context" axis, are a different, bounded figure instead — see §7.
+
 ## Provenance
 
 Cited from `adapters/claude_code.py` and `ir/models.py`.
@@ -242,10 +247,187 @@ Two detectors exist today, each its own module with its own `detect(session)`:
   visualized today — the `T1.1` child/tangent pattern is a distinct, not yet
   built "sub-agent opportunity" detector. Segmentation and pricing are both
   ported near-verbatim from the same prior prototype
-  (`Local_app/session_core.py`, `Local_app/split_advisor.py`).
+  (`Local_app/session_core.py`, `Local_app/split_advisor.py`), with one
+  addition: `_cluster_independent_spans` prices a split only at a genuinely
+  independent task's start, never in the middle of a back-and-forth between
+  RECURRING tasks — `T1, T2, T1, T2` prices as one span, not four. The task
+  lane still visualizes every band individually; only the pricing input is
+  coarser.
+
+## 7. Context-window snapshot
+
+*What problem this solves.*
+
+`session.tokens.total` (what the header used to label **"Context
+window"**) is `Session.tokens`'s naive sum of every
+event's `cache_read` across the whole session. `cache_read` is the entire
+resident prompt re-billed on *every later call*, so this sum is really a sum
+of overlapping prefixes — call 3's `cache_read` already contains almost all
+of call 2's, which already contains almost all of call 1's. A session with a
+few hundred KB of real conversation content produces tens of millions here
+purely from that compounding (verified: a real session's `total` was
+147,297,003 while no single call in it ever billed more than 637,348 tokens
+of prompt). Labelling that "Context window" is wrong twice over: it is not a
+per-call figure, and it has no ceiling, so it will always look "too big for
+the model."
+
+`analysis/attribution.py`'s existing `attributed_tokens` /
+`attributed_cache_read` (§ "How tokens are reported" above) do **not** fix
+this, because they answer a different question on purpose: "how much did
+this block cost across the whole session" (cumulative — correctly sums to
+the same inflated total, because that total is the real sum of real dollars
+billed). What is missing is a second, genuinely different question: "right
+now, at the end of the thread, what does the model's actual context window
+look like, broken down by what put each part there."
+
+### The idea
+
+The size of that question's answer is not an estimate — it is exactly
+`calls[-1].fresh + calls[-1].cached` for a thread, the real billed size of
+that thread's *last* call, already computed in `_attribute_thread`. What is
+an estimate is *whose* content each token of it is: the same calibrated
+size model (`generated_weight` / `result_weight`) that already prices
+`attributed_tokens` stands in here too, and the same `split_exact`
+largest-remainder trick that already keeps `attributed_cache_read` summing
+exactly to the header cost keeps this summing exactly to the real,
+bounded, per-call number instead of an unbounded cross-call sum.
+
+Concretely: `_attribute_thread`'s `context` list already *is* "what is
+currently resident," rebuilt incrementally after every call and reset on
+every compaction boundary (`analysis/attribution.py:591-627`). At the point
+the function currently calls `settle_cache_reads(context)` for the last time
+(`analysis/attribution.py:764`) and returns, that list holds exactly the
+composition of the thread's real final prompt. The only new work is one more
+`split_exact` pass there: divide `calls[-1].fresh + calls[-1].cached` (exact)
+across `context`'s entries by their existing calibrated weights (estimated),
+and hand each entry's share to its event.
+
+### New fields
+
+- `Event.context_tokens: int` — this event's estimated share of its own
+  thread's *current* context window. Set once, inside `_attribute_thread`,
+  never touched by the existing cost/cache-read attribution passes.
+- `Block.context_tokens` — `sum(e.context_tokens for e in self.events)`,
+  the same aggregating-property pattern `attributed_tokens` already uses.
+  Added to `Block.as_dict()`.
+- `Session.context_window_tokens` — **main thread only**
+  (`sum(e.context_tokens for e in session.events if e.agent_id is None)`),
+  exactly equal to the main thread's own `calls[-1].fresh + calls[-1].cached`
+  by construction. This is what `web/session.js`'s "Context window" stat
+  should show instead of `session.tokens.total`.
+
+Why "main thread only" matters and cannot be sidestepped: a subagent's
+context window is a different, isolated window on a different call
+sequence. Summing it into the session header would silently reintroduce a
+cross-window sum — the exact mistake this feature exists to remove. A
+subagent's *own* bar page gets its own `context_window_tokens` for free,
+from the same per-thread computation `attribute()` already runs separately
+per `agent_id` (`analysis/attribution.py:415-423`).
+
+A top-level "subagent" band `Block` in the *main* bar, however, already
+folds that subagent's inner events into its own `.events` for
+`attributed_tokens`/`attributed_cost` (that is how a real band shows
+6,568,839 attributed tokens for one `Task` call and its result — the
+subagent's own thread-scoped attribution flows up into the band that
+displays it). **Decided: do the same for `context_tokens`** — a band's
+figure is the sum across both its own spawning call and its subagent's
+inner thread, same convention the codebase already uses for
+`attributed_total`. The header stat stays correct regardless, since it is
+computed from main-thread events directly, not from summing blocks.
+
+### The unowned baseline
+
+The system prompt and tool definitions are resident in every call's prompt
+but belong to no single block. Two things sit inside that one lump, and only
+one of them is really "about" a block's tools:
+
+- the system prompt proper — Claude Code's standing instructions, identity,
+  environment info, `CLAUDE.md` — generic, tied to no tool at all;
+- the tool *definitions* — the JSON schema for every available tool (Read,
+  Bash, Edit, ...) — genuinely per-tool in origin, even though every schema
+  is sent on every call whether or not that tool gets used this turn.
+
+Neither is recoverable at that resolution from the data available: Claude
+Code's transcripts never log the system-prompt text or the tool schemas,
+only the billed size of the calls that included them (`baseline_weight =
+calls[0].fresh + calls[0].cached`, analysis/attribution.py:573). There is no
+per-tool split to attribute precisely.
+
+**Decided: fold the baseline into blocks, the same way `attribute()`
+already spreads the identical baseline for cost/cache-read** (rule 3,
+analysis/attribution.py:425-451) — proportional to each block's own share of
+the real content, not a flat split and not a separate line item. This is an
+honest proxy, not a per-tool truth: a block that did more of the session's
+real work also absorbs more of this fixed overhead, which is the closest
+this data supports to "the blocks that used tools pay for the tool
+definitions."
+
+### Compaction
+
+Needs no new handling: `context` already resets at every compaction
+boundary (`analysis/attribution.py:606-627`), so content from before the
+most recent compaction is already excluded from "what a next call would
+re-send" — which is exactly "not part of the current context window."
+
+### What does not change
+
+`attributed_tokens`, `attributed_cache_read`, `attributed_cost` and the
+existing "cost" / "tokens" bar Y-axis metrics stay exactly as they are — they
+answer "what did this cost across the whole session" and remain the right
+answer to that question. This adds a second, independent metric; it does not
+replace the first.
+
+### UI changes
+
+- `web/session.js:41` — "Context window" stat reads
+  `session.context_window_tokens` instead of `session.tokens.total`.
+- `web/bar.js` — a new Y-axis metric (e.g. `"context"`), sized by
+  `block.context_tokens`, distinct from the existing `"tokens"` metric
+  (`attributed_total`, which stays as the cumulative-billing view).
+
+### Tests to add (CLAUDE.md §6)
+
+- A multi-call fixture: `sum(block.context_tokens for main-thread blocks)
+  == session.context_window_tokens == ` the real last call's
+  `fresh + cached`, computed by hand from the fixture's own usage numbers.
+- A session whose calibrated weights are deliberately wrong (e.g. a huge
+  prose block with a tiny real char count) still sums exactly — pins the
+  `split_exact` exactness guarantee independent of estimate quality.
+- A compacted session: a block entirely before the compaction boundary gets
+  `context_tokens == 0` even though it has nonzero `attributed_tokens`.
+- A session with a subagent: the subagent's own `context_window_tokens`
+  (from its own thread) is independent of, and not summed into, the main
+  thread's `context_window_tokens`.
+- A single-call session: `context_window_tokens` equals that one call's
+  `input + cache_read + cache_creation` exactly, all of it landing on
+  whatever block generated the human's first prompt (there is only one
+  block to absorb the baseline into).
+- The baseline is folded proportionally, not flatly: two sessions with the
+  same baseline size but different-sized blocks split it unevenly, in
+  proportion to each block's own share — pins that it is rule-3-style
+  proportional folding, not an even split across however many blocks exist.
+
+### Left out on purpose
+
+- **Peak, not last.** A thread could have billed a larger prompt earlier
+  (before a compaction shrank it) than its last call. This spec deliberately
+  tracks the *last* call, i.e. "what does my context look like right now" —
+  matching what was asked for. A separate "did this session ever come close
+  to the model's real limit" metric would want the *peak* across all calls
+  instead, which is a different, smaller, follow-on feature, not this one.
+- **`analysis/chunk_split_model.py`'s pricing.** Separately, `as_is_cost` on
+  a detected problem uses a hardcoded flat "blended Opus-4.x" rate
+  (`analysis/chunk_split_model.py:53-61`) instead of the real per-model table
+  `analysis/pricing.py` already provides, so it disagrees with
+  `attributed_cost` ("Retrospective cost") by the ratio between the two
+  models' real rates. Agreed fix, unrelated to this spec: make
+  `price_split` / `price_multi_split` price with `pricing.price_for_model`
+  for the session's actual model(s) instead.
 
 ## Left to do
 
 1. The child/tangent "sub-agent opportunity" detector
 2. A richer hover readout
 3. Other vendors — the adapter boundary exists, only Claude Code is written
+4. A peak-context (not just last-call) metric, and the `chunk_split_model`
+   pricing fix — both noted as left out on purpose in §7

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -62,6 +63,14 @@ _cache: dict[str, tuple[tuple, Session]] = {}
 # Rows per page. The list is a "what did I do lately" view, so the first screen
 # is what matters and the rest is opt-in.
 PAGE_SIZE = 20
+
+# ``/api/problems`` scans sessions through a thread pool: each detector's work
+# is a network call to the judge LLM, so the GIL releases for most of it and
+# threads genuinely overlap. This matters a lot with a reasoning model on the
+# other end (e.g. ``openai/gpt-5.6-luna``) — its per-call latency is seconds,
+# not milliseconds, and scanning a page of sessions serially made that latency
+# additive across the whole page instead of paid once.
+PROBLEM_SCAN_WORKERS = 8
 
 
 def _stamp(path: Path) -> tuple:
@@ -263,16 +272,26 @@ def problems(
     stretch of clean sessions can come back as a short or empty page with
     ``has_more`` still true — the client should keep clicking "load more"
     rather than reading a short page as the end of the list.
+
+    Sessions are scanned through ``PROBLEM_SCAN_WORKERS`` threads, since each
+    session's detectors are dominated by a network call to the judge LLM
+    rather than local computation.
     """
     candidates = _candidates(project)
     sessions_scanned = _load_page(candidates, offset, limit)
 
-    rows = []
-    for session in sessions_scanned:
+    def scan(session: Session) -> Session:
         if not session.blocks:
             session.blocks = build_blocks(session)
         if not session.problems:
             session.problems = detect_problems(session)
+        return session
+
+    with ThreadPoolExecutor(max_workers=PROBLEM_SCAN_WORKERS) as pool:
+        sessions_scanned = list(pool.map(scan, sessions_scanned))
+
+    rows = []
+    for session in sessions_scanned:
         # The same summary shape `/api/sessions` rows use (title, tokens,
         # tool_call_count, duration_s, subagent_count, ...), so a problem row
         # can show the session it belongs to without a second request.
@@ -380,6 +399,7 @@ def _block_payload(session: Session, block: Block, index: int, block_count: int,
         "attributed_tokens": block.attributed_tokens,
         "attributed_cache_read": block.attributed_cache_read,
         "attributed_total": block.attributed_total,
+        "context_tokens": block.context_tokens,
         "message_count": block.message_count,
         "summary": step_summary(steps),
         "steps": own_steps,
@@ -410,6 +430,7 @@ def _agent_detail(agent: Block, summary_only: bool = False) -> dict:
         "attributed_cache_read": agent.attributed_cache_read,
         "attributed_total": agent.attributed_total,
         "attributed_cost": agent.attributed_cost,
+        "context_tokens": agent.context_tokens,
         "message_count": agent.message_count,
         "summary": step_summary(steps),
         "block_count": len(agent.inner_blocks),

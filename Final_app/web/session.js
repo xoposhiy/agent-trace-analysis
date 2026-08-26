@@ -3,13 +3,6 @@
 
 const sessionId = decodeURIComponent(location.pathname.split('/').pop());
 
-function stat(key, value) {
-  const box = el('div');
-  box.appendChild(el('div', 'stat-k', key));
-  box.appendChild(el('div', 'stat-v', value));
-  return box;
-}
-
 async function load() {
   let session;
   try {
@@ -34,34 +27,10 @@ async function load() {
   if (session.model) meta.appendChild(el('span', 'pill', session.model));
   meta.appendChild(el('span', null, `last message ${absoluteTime(session.last_ts)}`));
 
-  // "Context window", not "Tokens": every billed token, cache reads included.
-  // It has to be the total rather than `working`, because the bar below is now
-  // sized by each block's whole context-window cost — a header showing
-  // `working` would be the smaller number the blocks visibly do not sum to.
-  const tokenStat = stat('Context window', formatNumber(session.tokens.total));
-  tokenStat.title = `${session.tokens.working.toLocaleString()} excluding cache reads`
-    + ` · in ${session.tokens.input.toLocaleString()}`
-    + ` · out ${session.tokens.output.toLocaleString()}`
-    + ` · cache write ${session.tokens.cache_creation.toLocaleString()}`
-    + ` · cache read ${session.tokens.cache_read.toLocaleString()}`;
-
-  // Sums to exactly the same figure as the bar underneath it — every block's
-  // `attributed_cost` added up — because both come from the one attribution
-  // pass in `analysis.attribution`. See `Session.attributed_cost`.
-  const costStat = stat('Retrospective cost', formatCost(session.attributed_cost));
-  costStat.title = 'Priced per call at Anthropic\'s rate for the model that call'
-    + ' actually ran on — an attribution across the session\'s blocks, the'
-    + ' dollar counterpart of the context-window figure beside it.';
-
-  document.getElementById('stats').replaceChildren(
-    tokenStat,
-    costStat,
-    stat('Messages', formatNumber(session.message_count)),
-    stat('Tool calls', formatNumber(session.tool_call_count)),
-    stat('Subagents', String(session.subagent_count)),
-    stat('Duration', formatDuration(session.duration_s)),
-    stat('Compactions', String(session.compaction_points.length)),
-  );
+  // Shared with problem.js (`common.js`'s `sessionStats`), so a session's
+  // own page and any of its detected problems' pages always agree on the
+  // same header numbers.
+  document.getElementById('stats').replaceChildren(...sessionStats(session));
 
   drawBar(session);
   renderSessionProblems(session.problems || []);
@@ -118,7 +87,7 @@ function countByKind(blocks) {
   return counts;
 }
 
-function showTip(block) {
+function showTip(block, metric) {
   const tip = document.getElementById('tip');
   if (!block) {
     tip.className = 'tip tip-empty';
@@ -133,10 +102,28 @@ function showTip(block) {
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
 
-  // The block's share of the whole context window — cache reads included, so
-  // this is the figure the bar is sized by — then how much of it is re-reads,
-  // which is what explains a tall block that barely did anything.
-  tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  if (metric === 'context') {
+    // The bar is sized by `block.context_tokens` in this mode — the real,
+    // bounded context window (DESIGN.md §7) — which is a different, smaller
+    // number from the cumulative `tokenFacts` shows below, and must not be
+    // summed against it: showing the cumulative figure here while the bar is
+    // visibly sized by the bounded one is exactly the "tokens don't add up
+    // to the header" confusion this branch exists to avoid.
+    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
+    const contextSpan = el('span', null, `${formatNumber(contextTokens)} tokens`);
+    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
+      + ` bounded context window this block currently holds — not summed`
+      + ' across every later call that re-read it (switch to the "tokens"'
+      + ' axis for that cumulative figure).';
+    facts.appendChild(contextSpan);
+  } else {
+    // The block's CUMULATIVE billed tokens across the whole session — what
+    // the "tokens" axis sizes by, unbounded — then how much of it is
+    // re-reads, which is what explains a tall block that barely did
+    // anything. Never sums to the "Context window" header stat; that is
+    // the separate, bounded `context` axis above.
+    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  }
   facts.appendChild(costFact(block));
 
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
@@ -165,11 +152,17 @@ function drawBar(session) {
   // is taller than the viewport. Capping it at one screen — as this did until
   // 2026-08-05 — left no proportional space in the layout, so every block
   // rendered at the 3px floor and the metric selector had no visible effect.
-  const draw = () => renderBar(document.getElementById('bar'), blocks, {
-    metric: select.value,
-    onHover: showTip,
-    onOpen: openBlock,
-  });
+  const draw = () => {
+    renderBar(document.getElementById('bar'), blocks, {
+      metric: select.value,
+      // Reads `select.value` at hover time, not draw time, so the tooltip
+      // still matches whichever axis is selected right now even if the user
+      // switches it while a block happens to be focused.
+      onHover: (block) => showTip(block, select.value),
+      onOpen: openBlock,
+    });
+    renderMetricTotal(document.getElementById('metric-total'), session, select.value);
+  };
 
   select.addEventListener('change', draw);
   draw();

@@ -28,7 +28,12 @@ is a prior prototype's linear-context-ramp cost model
 ``(input, output, cache_write, cache_read, api_calls)`` bucket that model's
 functions expect, the same way that prototype's own ``session_core.py`` adapted
 raw transcript events into it. ``price_split`` below is a direct, otherwise
-unmodified port of that prototype's ``saving_for_split``.
+unmodified port of that prototype's ``saving_for_split`` — with one exception:
+it now passes ``_rates_for_session(session)`` instead of that model's built-in
+flat, model-agnostic default (a blended Opus-4.x guess) into every
+``chunk_split_model`` call, so ``as_is_cost`` prices this session's own real
+model and agrees with ``analysis.attribution``'s "Retrospective cost" instead
+of disagreeing with it by the ratio between the two rates.
 
 Only a single split (this detector never proposes more than one cut) is
 needed here, so the general N-way chunking and the sub-agent excise-and-rejoin
@@ -56,7 +61,8 @@ from typing import Optional
 
 from Final_app.analysis import chunk_split_model as csm
 from Final_app.analysis import classify
-from Final_app.config import CACHE_DIR, JUDGE_MODEL, LLM_BASE_URL, LLM_TIMEOUT_S
+from Final_app.analysis.pricing import price_for_model
+from Final_app.config import CACHE_DIR, JUDGE_MODEL, LLM_BASE_URL, LLM_TIMEOUT_S, chat_completion
 from Final_app.ir.models import (
     EV_ASSISTANT,
     EV_TOOL_USE,
@@ -133,15 +139,77 @@ def _session_buckets(session: Session) -> tuple[int, int, int, int, int]:
     return input_tok, output_tok, cache_write_tok, cache_read_tok, api_calls
 
 
+def _rates_for_session(session: Session) -> csm.Rates:
+    """This session's real per-token rates, in ``chunk_split_model``'s shape.
+
+    ``chunk_split_model`` was carried over with one hardcoded, model-agnostic
+    rate table (``csm.DEFAULT_RATES``, a blended Opus-4.x guess) — pricing
+    every session identically regardless of which model actually ran it, and
+    disagreeing with ``analysis.attribution``'s real per-model ledger
+    ("Retrospective cost") by exactly the ratio between the two rates. This
+    converts ``pricing.price_for_model``'s real $/token rates into the
+    $/MTok-plus-multiplier shape ``chunk_split_model`` expects, so both
+    pricing paths agree for a single-model session.
+
+    ``chunk_split_model`` prices a session as one lump sum, not call by call
+    like ``analysis.attribution`` does, so a session that switched models
+    mid-way is still priced at one blended rate here — ``session.model``,
+    the same single label already shown in the session header.
+    """
+    price = price_for_model(session.model)
+    return csm.Rates(
+        input_per_mtok=price.input * 1_000_000,
+        output_per_mtok=price.output * 1_000_000,
+        cache_write_mult=price.cache_write / price.input,
+        cache_read_mult=price.cache_read / price.input,
+    )
+
+
+def _subagent_cost(session: Session) -> float:
+    """Every dollar a subagent spent, exactly as ``analysis.attribution``
+    already priced it (real per-call rates, no re-estimation needed here).
+
+    ``chunk_split_model``'s linear-ramp geometry only describes the MAIN
+    thread's own context growth — a subagent runs in its own, separate,
+    isolated context window, so there is no sound way to fold its tokens
+    into the same ramp. It is added to ``split_cost`` on top of that estimate
+    instead (see ``price_split``): splitting the main thread does not change
+    what a subagent cost, so it is priced once, exactly, and carried through
+    unchanged rather than modelled on the ramp at all. ``as_is_cost`` needs no
+    such addition — it already includes every subagent dollar, being
+    ``session.attributed_cost`` itself.
+    """
+    return sum(e.attributed_cost for e in session.events if e.agent_id is not None)
+
+
 def price_split(session: Session, split_fraction: float,
                 alpha: float = SUMMARY_ALPHA) -> Optional[dict]:
     """Price splitting ``session`` at ``split_fraction`` of the way through.
 
-    A direct port of the prototype's ``session_core.saving_for_split``, over
-    buckets adapted from this session instead of a raw transcript. Returns
-    ``None`` when the session does not fit the ramp model at all: no real
-    cache-read, too few calls, or a split point too close to either end to
-    model sensibly.
+    Adapted from the prototype's ``session_core.saving_for_split`` — but
+    where that prototype (and this function, until this was fixed) priced
+    the CURRENT, unsplit session with the same rough estimate used for the
+    hypothetical split, ``as_is_cost`` here is simply ``session.attributed_cost``:
+    the exact bill ``analysis.attribution`` already computed, the same number
+    the session header calls "Retrospective cost". There is no reason to
+    re-estimate a number that is already known exactly, and doing so was
+    exactly why ``as_is_cost`` used to disagree with "Retrospective cost" —
+    first by rate, then by scope (subagents) — for what should always have
+    been the same session, priced the same way, everywhere in the app.
+
+    ``split_cost`` stays the ``chunk_split_model`` estimate: there is no
+    "exact" figure for a split that never happened, only a geometric
+    approximation of the linear context ramp, plus real subagent dollars
+    (``_subagent_cost``) added on top since a subagent's cost does not change
+    when the main thread's reading is split. ``percent_saving`` is now a
+    percentage of the session's one real total bill, not of a second
+    estimate — the number a user sees anywhere in the app for "what did this
+    cost" is this same ``as_is_cost``, never a different figure that happens
+    to answer the same question.
+
+    Returns ``None`` when the session does not fit the ramp model at all: no
+    real cache-read, too few calls, or a split point too close to either end
+    to model sensibly.
     """
     input_tok, output_tok, cache_write_tok, cache_read_tok, api_calls = _session_buckets(session)
     if cache_read_tok <= 0 or api_calls < 2:
@@ -153,16 +221,19 @@ def price_split(session: Session, split_fraction: float,
     if peak <= 0:
         return None
 
+    rates = _rates_for_session(session)
+    subagent_cost = _subagent_cost(session)
     heights = [peak * split_fraction, peak * (1.0 - split_fraction)]
     calls = csm.calls_per_chunk(heights, api_calls, peak)
     cache_read_split = csm.cache_read_after_split(heights, api_calls, peak)
 
     summary_tok = csm.summary_tokens(heights[0], alpha)
-    overhead, *_ = csm.summary_overhead_cost(calls[1:], summary_tok)
+    overhead, *_ = csm.summary_overhead_cost(calls[1:], summary_tok, rates)
 
-    as_is = csm.full_session_cost(input_tok, output_tok, cache_write_tok, cache_read_tok)
-    split = csm.base_cost_after_split(input_tok, output_tok, cache_write_tok,
-                                      cache_read_split) + overhead
+    as_is = session.attributed_cost
+    split = (csm.base_cost_after_split(input_tok, output_tok, cache_write_tok,
+                                       cache_read_split, rates)
+             + overhead + subagent_cost)
     dollar_saving = as_is - split
     percent_saving = (100.0 * dollar_saving / as_is) if as_is else 0.0
 
@@ -359,6 +430,10 @@ def justify(session: Session, read_block: Block) -> Optional[str]:
     prompt to ground the question in, or the call itself fails; the caller
     falls back to the structural detail sentence, the same degrade
     ``analysis.classify.judge_calls`` uses for an ambiguous Bash command.
+
+    Only a non-empty result is cached, so a failed call (a timeout, in
+    particular — see ``analysis.task_forest.judge_task_forest``) is retried on
+    the next scan rather than permanently losing its justification.
     """
     if not classify.llm_available():
         return None
@@ -381,7 +456,8 @@ def justify(session: Session, read_block: Block) -> Optional[str]:
 
         client = (OpenAI(base_url=LLM_BASE_URL, timeout=LLM_TIMEOUT_S)
                   if LLM_BASE_URL else OpenAI(timeout=LLM_TIMEOUT_S))
-        response = client.chat.completions.create(
+        response = chat_completion(
+            client,
             model=JUDGE_MODEL, max_tokens=120, temperature=0.2,
             messages=[{"role": "user",
                       "content": build_justification_prompt(task, targets, next_target)}],
@@ -390,8 +466,9 @@ def justify(session: Session, read_block: Block) -> Optional[str]:
     except Exception:
         text = ""
 
-    cache[key] = text
-    _save_justify_cache()
+    if text:
+        cache[key] = text
+        _save_justify_cache()
     return text or None
 
 

@@ -11,19 +11,16 @@ const PATH_PARTS = location.pathname.split('/').filter(Boolean);
 const sessionId = decodeURIComponent(PATH_PARTS[1]);
 const problemId = decodeURIComponent(PATH_PARTS[3]);
 
-function stat(key, value) {
-  const box = el('div');
-  box.appendChild(el('div', 'stat-k', key));
-  box.appendChild(el('div', 'stat-v', value));
-  return box;
-}
-
 function openBlock(_block, index) {
   window.open(`/session/${encodeURIComponent(sessionId)}/block/${index}`,
     '_blank', 'noopener');
 }
 
-function showTip(block) {
+// Mirrors session.js's own `showTip` — see it for why the branch exists:
+// the cumulative `tokenFacts` figure never sums to the bounded "Context
+// window" stat, so showing it while the bar is sized by the bounded
+// `context` metric is exactly the confusion this avoids.
+function showTip(block, metric) {
   const tip = document.getElementById('tip');
   if (!block) {
     tip.className = 'tip tip-empty';
@@ -37,7 +34,18 @@ function showTip(block) {
 
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
-  tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+
+  if (metric === 'context') {
+    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
+    const contextSpan = el('span', null, `${formatNumber(contextTokens)} tokens`);
+    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
+      + ` bounded context window this block currently holds — not summed`
+      + ' across every later call that re-read it (switch to the "tokens"'
+      + ' axis for that cumulative figure).';
+    facts.appendChild(contextSpan);
+  } else {
+    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  }
   facts.appendChild(costFact(block));
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   tip.appendChild(facts);
@@ -49,6 +57,35 @@ function countByKind(blocks) {
     counts[block.kind] = (counts[block.kind] || 0) + 1;
   });
   return counts;
+}
+
+// One row per priced chunk (task-switch only; ``data.chunks`` is absent for
+// a plan-mode problem, which is always a fixed 2-way split with nothing to
+// break down). A chunk covering more than one task id is the interleaving
+// case — DESIGN.md's `_cluster_independent_spans` — and reads as "T1 and
+// T2", not silently as just one of the ids it actually contains.
+function renderProblemChunks(chunks, tasks) {
+  const container = document.getElementById('problem-chunks');
+  if (!chunks || !chunks.length) {
+    container.replaceChildren();
+    return;
+  }
+
+  const labelOf = {};
+  (tasks || []).forEach((task) => { labelOf[task.id] = task.label; });
+
+  const list = el('div', 'list');
+  chunks.forEach((chunk, index) => {
+    const row = el('div', 'row-detail');
+    const names = chunk.task_ids.map((id) => labelOf[id] || id).join(' + ');
+    row.textContent = `Chunk ${index + 1}: ${chunk.label}`;
+    row.title = chunk.task_ids.length > 1
+      ? `A single priced piece covering ${names} together — interleaved,`
+        + ' never split apart internally.'
+      : names;
+    list.appendChild(row);
+  });
+  container.replaceChildren(el('h3', 'section-h', 'Chunks priced'), list);
 }
 
 async function load() {
@@ -78,34 +115,69 @@ async function load() {
   meta.appendChild(el('span', `pill pill-severity-${problem.severity}`, problem.severity));
   meta.appendChild(el('span', null, session.title || session.session_id.slice(0, 8)));
   meta.appendChild(el('span', 'pill', session.project_label));
+
+  // The same header the session's own page leads with (`common.js`'s
+  // `sessionStats`) — this page is about one problem WITHIN that session,
+  // not a different session, so "what is this session" should read
+  // identically wherever it's shown.
+  document.getElementById('stats').replaceChildren(...sessionStats(session));
+
+  // The problem-specific pricing comparison lives in the side panel, next
+  // to the hover tip it sits below — mirroring where the session page puts
+  // its own "Problems detected" panel.
+  const data = problem.data || {};
+  const problemStats = [
+    stat('As-is cost', formatCost(data.as_is_cost),
+      'The session\'s real, already-attributed bill — the same number as'
+      + ' "Retrospective cost" above, priced the same way everywhere in the app.'),
+    stat('Split cost', formatCost(data.split_cost),
+      'An ESTIMATE: there is no exact figure for a split that never happened,'
+      + ' only chunk_split_model\'s linear-context-ramp approximation.'),
+    stat('Saving', `${formatCost(data.dollar_saving)} (${Math.round(data.percent_saving || 0)}%)`),
+  ];
+  if (data.tasks) problemStats.push(stat('Tasks', String(data.tasks.length)));
+  // task-switch only: how many pieces the price above actually reflects —
+  // a stretch of back-and-forth between recurring tasks prices as ONE
+  // chunk, never one per switch, so this can be smaller than "Tasks" or
+  // than the number of bands in the lane below.
+  if (data.num_chunks) {
+    problemStats.push(stat('Chunks', String(data.num_chunks),
+      'How many separate pieces the split price reflects. A stretch of'
+      + ' back-and-forth between recurring tasks prices as one chunk, not'
+      + ' one per switch — see the detail text below.'));
+  }
+  document.getElementById('problem-stats').replaceChildren(...problemStats);
+
+  // What each priced chunk actually contains — task-switch only. A chunk
+  // that merged an interleaved stretch reads as "T1 and T2", not silently
+  // as just one of the two ids it actually covers.
+  renderProblemChunks(data.chunks, data.tasks);
+
   document.getElementById('detail').textContent = problem.detail;
   if (problem.data && problem.data.justification) {
     document.getElementById('justification').textContent =
       `“${problem.data.justification}”`;
   }
 
-  const data = problem.data || {};
-  const stats = [
-    stat('As-is cost', formatCost(data.as_is_cost)),
-    stat('Split cost', formatCost(data.split_cost)),
-    stat('Saving', `${formatCost(data.dollar_saving)} (${Math.round(data.percent_saving || 0)}%)`),
-  ];
-  if (data.tasks) stats.push(stat('Tasks', String(data.tasks.length)));
-  document.getElementById('stats').replaceChildren(...stats);
-
   const blocks = session.blocks || [];
-  renderBar(document.getElementById('bar'), blocks, {
-    metric: 'cost', onHover: showTip, onOpen: openBlock,
-  });
+  const select = document.getElementById('f-metric');
+  const draw = () => {
+    const metric = select.value;
+    renderBar(document.getElementById('bar'), blocks, {
+      metric, onHover: (block) => showTip(block, metric), onOpen: openBlock,
+    });
+    renderSecondBar(problem, blocks, data, metric);
+    renderMetricTotal(document.getElementById('metric-total'), session, metric);
+  };
+  select.addEventListener('change', draw);
+  draw();
   renderLegend(document.getElementById('legend'), countByKind(blocks));
-
-  renderSecondBar(problem, blocks, data);
 }
 
 // Which second visualization applies depends on the problem type — a cut
 // bar for plan-mode, a colored task lane for task-switch. Both containers
 // exist in problem.html; whichever doesn't apply is left empty.
-function renderSecondBar(problem, blocks, data) {
+function renderSecondBar(problem, blocks, data, metric) {
   const arrow = document.getElementById('bar-arrow');
   const planModeBar = document.getElementById('plan-mode-bar');
   const taskForestBar = document.getElementById('task-forest-bar');
@@ -121,14 +193,15 @@ function renderSecondBar(problem, blocks, data) {
       return;
     }
     arrow.hidden = false;
-    renderPlanModeBar(planModeBar, blocks, splitIndex, 'cost', showTip, openBlock);
+    renderPlanModeBar(planModeBar, blocks, splitIndex, metric,
+      (block) => showTip(block, metric), openBlock);
     return;
   }
 
   if (problem.id === 'task-switch') {
     arrow.hidden = true;
     planModeBar.replaceChildren();
-    renderTaskForestBar(taskForestBar, blocks, data.runs, 'cost');
+    renderTaskForestBar(taskForestBar, blocks, data.runs, metric);
     return;
   }
 

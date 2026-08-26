@@ -13,23 +13,34 @@ const PAGE_SIZE = 20;
 
 function initTabs() {
   const tabs = [...document.querySelectorAll('.tab')];
-  tabs.forEach((tab) => {
-    tab.addEventListener('click', () => {
-      tabs.forEach((other) => {
-        const selected = other === tab;
-        other.setAttribute('aria-selected', String(selected));
-        document.getElementById(other.getAttribute('aria-controls')).hidden = !selected;
-      });
-      // The Problems tab actually runs detection over whatever it scans
-      // (unlike the session list), so it is loaded on first click rather
-      // than on page load — opening the dashboard should not pay that cost
-      // for a tab the user may never open.
-      if (tab.id === 'tab-problems' && !problemsState.loaded) {
-        problemsState.loaded = true;
-        loadProblems();
-      }
+
+  function selectTab(tab) {
+    tabs.forEach((other) => {
+      const selected = other === tab;
+      other.setAttribute('aria-selected', String(selected));
+      document.getElementById(other.getAttribute('aria-controls')).hidden = !selected;
     });
+    // The Problems tab actually runs detection over whatever it scans
+    // (unlike the session list), so it is loaded on first click rather
+    // than on page load — opening the dashboard should not pay that cost
+    // for a tab the user may never open.
+    if (tab.id === 'tab-problems' && !problemsState.loaded) {
+      problemsState.loaded = true;
+      loadProblems();
+    }
+  }
+
+  tabs.forEach((tab) => {
+    tab.addEventListener('click', () => selectTab(tab));
   });
+
+  // A deep link into the Problems tab — a detected problem's own page links
+  // back here with `/#problems` rather than a bare `/`, which would always
+  // land on the Sessions tab regardless of where the user came from.
+  if (location.hash === '#problems') {
+    const problemsTab = document.getElementById('tab-problems');
+    if (problemsTab) selectTab(problemsTab);
+  }
 }
 
 // --- LLM status -------------------------------------------------------
@@ -134,11 +145,13 @@ function sessionRow(session) {
   const project = el('span', 'pill', session.project_label);
   project.title = session.project;  // the label is a lossy heuristic
   meta.appendChild(project);
-  // The same figure the session page and its bar lead with — every billed
-  // token. One meaning of "tokens" across the app; the split is on hover.
-  const tokens = el('span', null, `${formatNumber(session.tokens.total)} tokens`);
-  tokens.title = `${session.tokens.working.toLocaleString()} excluding cache reads`
-    + ` · ${session.tokens.cache_read.toLocaleString()} re-read from cache`;
+  // The same bounded figure the session page's header now leads with
+  // (DESIGN.md §7) — the real size of the main thread's last call, not
+  // `session.tokens.total`'s unbounded cross-call sum.
+  const tokens = el('span', null, `${formatNumber(session.context_window_tokens)} tokens`);
+  tokens.title = `${session.tokens.working.toLocaleString()} generated this session`
+    + ` (excludes cache reads) · ${session.tokens.cache_read.toLocaleString()}`
+    + ` cache read, cumulative across every call this session made`;
   meta.appendChild(tokens);
   meta.appendChild(el('span', null, `${session.tool_call_count} tool calls`));
   meta.appendChild(el('span', null, formatDuration(session.duration_s)));
@@ -239,9 +252,12 @@ function problemRow(row) {
   meta.appendChild(el('span', 'row-session-title',
     row.title || row.session_id.slice(0, 8)));
   meta.appendChild(el('span', 'pill', row.project_label));
-  const tokens = el('span', null, `${formatNumber(row.tokens.total)} tokens`);
-  tokens.title = `${row.tokens.working.toLocaleString()} excluding cache reads`
-    + ` · ${row.tokens.cache_read.toLocaleString()} re-read from cache`;
+  // See `sessionRow` above: the bounded context-window figure, not the
+  // unbounded cross-call sum.
+  const tokens = el('span', null, `${formatNumber(row.context_window_tokens)} tokens`);
+  tokens.title = `${row.tokens.working.toLocaleString()} generated this session`
+    + ` (excludes cache reads) · ${row.tokens.cache_read.toLocaleString()}`
+    + ` cache read, cumulative across every call this session made`;
   meta.appendChild(tokens);
   meta.appendChild(el('span', null, `${row.tool_call_count} tool calls`));
   meta.appendChild(el('span', null, formatDuration(row.duration_s)));

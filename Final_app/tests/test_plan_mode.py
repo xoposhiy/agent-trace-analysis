@@ -99,12 +99,62 @@ def _fake_response(text: str):
     return types.SimpleNamespace(choices=[choice])
 
 
-def _call(index: int, cache_read: int = 0) -> Event:
+def _call(index: int, cache_read: int = 0, cost: float = 0.0) -> Event:
+    """``cost`` stands in for what ``analysis.attribution`` would have set on
+    a real Event; these tests build ``Session``/``Event`` directly rather
+    than through a real transcript, so nothing else ever populates it."""
     return Event(
         uuid=f"e{index}", ts=BASE_TIME + timedelta(seconds=index),
         type=EV_TOOL_USE, message_id=f"m{index}",
         tokens=Tokens(cache_read=cache_read),
+        attributed_cost=cost,
     )
+
+
+# ----------------------------------------------------------------------
+# _rates_for_session — real per-model rates, in chunk_split_model's shape
+# ----------------------------------------------------------------------
+# The bug this exists to fix: chunk_split_model's own DEFAULT_RATES is one
+# flat, model-agnostic guess (4.75/23.75, a blended Opus-4.x estimate), so
+# every session's `as_is_cost` disagreed with `Session.attributed_cost`
+# ("Retrospective cost") by the ratio between that guess and whichever model
+# actually ran the session.
+
+@pytest.mark.parametrize("model,expected_input,expected_output", [
+    ("claude-opus-4-6", 5.00, 25.00),
+    ("claude-haiku-4-5", 1.00, 5.00),
+])
+def test_rates_for_session_matches_the_real_per_model_price(
+    model: str, expected_input: float, expected_output: float
+):
+    from Final_app.analysis.plan_mode import _rates_for_session
+    from Final_app.analysis.pricing import price_for_model
+
+    session = Session(session_id="s", project="p", model=model)
+    rates = _rates_for_session(session)
+    price = price_for_model(model)
+
+    assert rates.input_per_mtok == pytest.approx(expected_input)
+    assert rates.output_per_mtok == pytest.approx(expected_output)
+    # Reconstructing $/token from the Rates shape must reproduce exactly what
+    # `pricing.price_for_model` says this model bills — the whole point.
+    assert rates.input_per_mtok / 1e6 == pytest.approx(price.input)
+    assert rates.output_per_mtok / 1e6 == pytest.approx(price.output)
+    assert rates.cache_write_mult * rates.input_per_mtok / 1e6 == pytest.approx(
+        price.cache_write)
+    assert rates.cache_read_mult * rates.input_per_mtok / 1e6 == pytest.approx(
+        price.cache_read)
+
+
+def test_rates_for_session_falls_back_to_the_default_price_for_an_unknown_model():
+    from Final_app.analysis.plan_mode import _rates_for_session
+    from Final_app.analysis.pricing import DEFAULT_PRICE
+
+    session = Session(session_id="s", project="p", model="")
+    rates = _rates_for_session(session)
+
+    assert rates.input_per_mtok == pytest.approx(DEFAULT_PRICE.input * 1_000_000)
+    assert rates.output_per_mtok == pytest.approx(DEFAULT_PRICE.output * 1_000_000)
 
 
 # ----------------------------------------------------------------------
@@ -132,31 +182,107 @@ def test_price_split_returns_none_for_a_degenerate_split_point(fraction):
     assert price_split(session, fraction) is None
 
 
-def test_price_split_matches_a_hand_computed_saving():
-    """20 calls, 20M cache-read tokens total, split at 0.25.
-
-    Hand-computed against ``chunk_split_model``'s own formulas at its default
-    blended rates: peak = 2*20e6/20 = 2e6; heights = [0.5e6, 1.5e6]; calls per
-    chunk = [5, 15]; cache-read after = (20/(2*2e6)) * (0.5e6^2 + 1.5e6^2) =
-    12.5e6; summary tokens = 0.1 * 0.5e6 = 5e4; overhead over 15 calls =
-    (23.75*5e4 + 1.25*4.75*5e4 + 0.10*4.75*5e4*14) / 1e6 = 0.1816875;
-    as-is = (20e6 * 4.75 * 0.10) / 1e6 = 9.5; split = (12.5e6 * 4.75 * 0.10)
-    / 1e6 + 0.1816875 = 7.754375; saving = 1.745625 (18.375%).
+def test_price_split_as_is_cost_is_the_sessions_real_attributed_cost():
+    """``as_is_cost`` must be ``session.attributed_cost`` itself, not a
+    second, independently-computed estimate — the whole point of the fix
+    this pins: the same number the session header calls "Retrospective
+    cost" everywhere in the app, never a different figure that can disagree
+    with it. Each of the 20 calls carries $0.50 of real attributed cost
+    (set directly, since this fixture builds ``Event``s by hand rather than
+    running them through ``analysis.attribution``), summing to $10.00.
     """
     session = Session(
-        session_id="s", project="p",
-        events=[_call(i, 1_000_000) for i in range(20)],
+        session_id="s", project="p", model="claude-opus-4-6",
+        events=[_call(i, 1_000_000, cost=0.5) for i in range(20)],
     )
 
     saving = price_split(session, 0.25)
 
     assert saving is not None
-    assert saving["as_is_cost"] == pytest.approx(9.5)
+    assert saving["as_is_cost"] == pytest.approx(session.attributed_cost)
+    assert saving["as_is_cost"] == pytest.approx(10.0)
+
+
+def test_price_split_matches_a_hand_computed_saving():
+    """20 calls, 20M cache-read tokens total, split at 0.25, on a session
+    whose model is ``claude-opus-4-6`` ($5.00/$25.00 per MTok). ``as_is_cost``
+    is the fixture's own $10.00 of real attributed cost (see the test above);
+    ``split_cost`` is still the ``chunk_split_model`` ESTIMATE, since there is
+    no exact figure for a split that never happened.
+
+    Hand-computed against ``chunk_split_model``'s own formulas at this
+    session's real per-model rate (``plan_mode._rates_for_session``), not
+    ``chunk_split_model``'s flat model-agnostic default of 4.75/23.75. The
+    cache read/write multipliers (1.25x / 0.10x input) are unchanged, since
+    ``pricing.py`` uses the same ones by default: peak = 2*20e6/20 = 2e6;
+    heights = [0.5e6, 1.5e6]; calls per chunk = [5, 15]; cache-read after =
+    (20/(2*2e6)) * (0.5e6^2 + 1.5e6^2) = 12.5e6; summary tokens =
+    0.1 * 0.5e6 = 5e4; overhead over 15 calls = (25*5e4 + 1.25*5*5e4 +
+    0.10*5*5e4*14) / 1e6 = 0.19125; split = (12.5e6 * 5 * 0.10) / 1e6
+    + 0.19125 = 8.1625; saving = 10.0 - 8.1625 = 1.8375 (18.375%).
+    """
+    session = Session(
+        session_id="s", project="p", model="claude-opus-4-6",
+        events=[_call(i, 1_000_000, cost=0.5) for i in range(20)],
+    )
+
+    saving = price_split(session, 0.25)
+
+    assert saving is not None
+    assert saving["as_is_cost"] == pytest.approx(10.0)
     assert saving["cache_read_after"] == pytest.approx(12_500_000)
-    assert saving["split_cost"] == pytest.approx(7.754375)
-    assert saving["dollar_saving"] == pytest.approx(1.745625)
+    assert saving["split_cost"] == pytest.approx(8.1625)
+    assert saving["dollar_saving"] == pytest.approx(1.8375)
     assert saving["percent_saving"] == pytest.approx(18.375)
     assert saving["token_saving"] == pytest.approx(7_500_000)
+
+
+def test_price_split_falls_back_to_the_default_rate_with_no_model_recorded(
+):
+    """A session with no ``model`` field must still price ``split_cost``,
+    not crash — the same "estimate flagged, never silently $0 or a raised
+    error" rule ``pricing.price_for_model`` already applies elsewhere.
+    ``as_is_cost`` is unaffected by the model at all now, since it comes
+    straight from ``session.attributed_cost``.
+    """
+    session = Session(
+        session_id="s", project="p",
+        events=[_call(i, 1_000_000, cost=1.0) for i in range(20)],
+    )
+
+    saving = price_split(session, 0.25)
+
+    assert saving is not None
+    assert saving["as_is_cost"] == pytest.approx(20.0)
+    assert saving["split_cost"] > 0
+
+
+def test_price_split_adds_subagent_cost_to_both_sides_unchanged():
+    """A subagent's own dollars land in ``as_is_cost`` "for free" now — it is
+    ``session.attributed_cost``, which already sums every event, subagent
+    included — and are added to ``split_cost`` on top of the ramp estimate
+    (``_subagent_cost``), since splitting the main thread doesn't touch what
+    a subagent cost. Both sides grow by exactly the same amount either way,
+    so ``dollar_saving`` (their difference) is exactly unchanged — only
+    ``percent_saving`` moves, since it is now a share of the real total bill.
+    """
+    main_events = [_call(i, 1_000_000, cost=0.5) for i in range(20)]
+    subagent_event = Event(
+        uuid="sub-e0", ts=BASE_TIME, type=EV_TOOL_USE, message_id="sub-m0",
+        agent_id="sub1", attributed_cost=3.0,
+    )
+    without_subagent = Session(session_id="s", project="p", model="claude-opus-4-6",
+                               events=main_events)
+    with_subagent = Session(session_id="s", project="p", model="claude-opus-4-6",
+                            events=main_events + [subagent_event])
+
+    baseline = price_split(without_subagent, 0.25)
+    plus_subagent = price_split(with_subagent, 0.25)
+
+    assert plus_subagent["as_is_cost"] == pytest.approx(baseline["as_is_cost"] + 3.0)
+    assert plus_subagent["split_cost"] == pytest.approx(baseline["split_cost"] + 3.0)
+    assert plus_subagent["dollar_saving"] == pytest.approx(baseline["dollar_saving"])
+    assert plus_subagent["percent_saving"] < baseline["percent_saving"]
 
 
 # ----------------------------------------------------------------------
@@ -218,6 +344,14 @@ def _front_loaded_transcript(claude_home: Path, used_plan_mode: bool = False) ->
     edits — the shape Pattern A is built to catch. Ten edits, not one: the
     ramp model's carried-summary overhead is only worth paying when enough of
     the session remains afterward to amortise it over.
+
+    Every call also carries a small, realistic ``input``/``output``
+    (and, for edits, ``cache_creation``) figure — a real transcript never
+    bills zero on every channel but ``cache_read``, and ``price_split`` now
+    needs ``session.attributed_cost`` to be a real, complete number (not the
+    near-total loss ``analysis.attribution`` suffers when every call's
+    ``fresh`` channel is zero — see ``attribute()``'s own "single case that
+    leaves either unplaced" note).
     """
     lines = [user_line("u1", "Fix the bug", "2026-08-01T10:00:00.000Z")]
     if used_plan_mode:
@@ -226,7 +360,7 @@ def _front_loaded_transcript(claude_home: Path, used_plan_mode: bool = False) ->
         when = f"2026-08-01T10:00:{i + 1:02d}.000Z"
         lines.append(assistant_tool_line(
             f"a{i}", f"msg{i}", f"t{i}", "Read", {"file_path": f"/repo/f{i}.py"},
-            when, cache_read=2_000_000,
+            when, input_tokens=50, output_tokens=40, cache_read=2_000_000,
         ))
         lines.append(tool_result_line(
             f"r{i}", f"t{i}", "file contents", when,
@@ -236,7 +370,7 @@ def _front_loaded_transcript(claude_home: Path, used_plan_mode: bool = False) ->
         when = f"2026-08-01T10:00:{i + 7:02d}.000Z"
         lines.append(assistant_tool_line(
             f"ae{i}", f"msg-edit{i}", f"te{i}", "Edit", {"file_path": "/repo/f0.py"},
-            when,
+            when, input_tokens=30, output_tokens=25, cache_creation=40,
         ))
         lines.append(tool_result_line(
             f"re{i}", f"te{i}", "ok", when,
@@ -396,6 +530,28 @@ def test_justify_returns_none_when_the_call_fails(monkeypatch: pytest.MonkeyPatc
     read_block = _read_block_with_targets("/repo/a.py")
 
     assert justify(session, read_block) is None
+
+
+def test_a_failed_call_is_retried_rather_than_cached(monkeypatch: pytest.MonkeyPatch):
+    """A timeout used to be cached as the empty string, permanently losing the
+    justification even after the failure was transient. A failure must not be
+    cached, so the next call gets a real second attempt."""
+    monkeypatch.setattr(classify, "llm_available", lambda: True)
+    attempts = {"n": 0}
+
+    def flaky(**kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise TimeoutError("timed out")
+        return _fake_response("a reason, found on the second try")
+
+    install_fake_openai(monkeypatch, flaky)
+    session = Session(session_id="s", project="p", user_prompts=["fix the login bug"])
+    read_block = _read_block_with_targets("/repo/a.py")
+
+    assert justify(session, read_block) is None
+    assert justify(session, read_block) == "a reason, found on the second try"
+    assert attempts["n"] == 2, "the second call must have reached the LLM, not a stale cache entry"
 
 
 def test_detect_includes_a_justification_when_the_llm_is_available(

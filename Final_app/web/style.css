@@ -120,6 +120,12 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
   font-style: italic;
 }
 
+.metric-total {
+  color: var(--muted);
+  font-size: 12.5px;
+  align-self: center;
+}
+
 /* --- session list ------------------------------------------------- */
 
 .list { display: flex; flex-direction: column; gap: 8px; }
@@ -285,6 +291,8 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 
 .back { color: var(--muted); font-size: 13px; }
 .back:hover { color: var(--text); }
+
+.back-row { display: flex; gap: 16px; align-items: baseline; }
 
 .detail-head { margin: 14px 0 20px; }
 .detail-head h2 { margin: 0 0 6px; font-size: 19px; font-weight: 600; }

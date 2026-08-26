@@ -88,6 +88,17 @@ to an Event, a matching dollar share is computed from the *call* that paid it
 Sonnet main thread re-reading what a Haiku subagent wrote). That keeps a
 mixed-model session priced correctly without a second pass over the
 transcript. See ``analysis.pricing`` for the rate table.
+
+Context window (a different question, not a bigger one)
+---------------------------------------------------------
+Everything above answers "how much did this cost across the whole session" —
+cumulative, and correctly unbounded, because a real dollar spent re-reading
+cache on the tenth call is a real dollar regardless of the ninth. That is not
+"how big is my context window right now", which has to be bounded by one real
+call's actual billed size or it inherits the exact prefix-sum blow-up CLAUDE.md
+§7 warns about. ``Event.context_tokens`` answers that second question instead,
+set at the end of ``_attribute_thread`` from that thread's own last call — see
+DESIGN.md §7 for the full design and why it has to stay scoped per thread.
 """
 
 from __future__ import annotations
@@ -400,6 +411,7 @@ def attribute(session: Session) -> int:
         event.attributed_tokens = 0
         event.attributed_cache_read = 0
         event.attributed_cost = 0.0
+        event.context_tokens = 0
 
     # Subagents are billed on their own transcripts, so each thread attributes
     # independently; mixing them would charge a parent call for a child's work.
@@ -791,5 +803,45 @@ def _attribute_thread(events: list[Event], calibration: Calibration,
             unplaced_cost += dollars_earned
         else:
             event.attributed_cost += dollars_earned
+
+    # ------------------------------------------------------------------
+    # Context-window snapshot (DESIGN.md §7). A different question from the
+    # ledger above: not "how much did this cost across the WHOLE session"
+    # (cumulative, unbounded — the trap CLAUDE.md §7 warns about) but "what
+    # does the context look like RIGHT NOW" — bounded by one real call's
+    # actual billed size.
+    #
+    # ``context`` still holds exactly what is resident at the end of this
+    # thread (the settlement above only reads it). Its entries' weights are
+    # calibrated estimates; the total they are split against is not —
+    # ``last_call.fresh + last_call.cached`` is the real, billed size of the
+    # thread's own last call, never a sum across calls.
+    last_call = calls[-1]
+    context_window_total = last_call.fresh + last_call.cached
+    if context_window_total > 0:
+        context_weights = [max(0, round(weight)) for _event, weight, *_ in context]
+        placed_context: list[tuple[Event, int]] = []
+        baseline_context_share = 0
+        for (event, *_rest), share in zip(context, split_exact(context_window_total, context_weights)):
+            if event is None:
+                baseline_context_share += share
+            else:
+                placed_context.append((event, share))
+                event.context_tokens += share
+
+        # The baseline (system prompt + tool definitions) belongs to no
+        # block, so its share folds back proportionally into whatever is
+        # actually resident — the same idea ``attribute()`` uses to spread
+        # its own baseline, kept strictly within this thread so a subagent's
+        # context window never absorbs its parent's baseline or vice versa.
+        # A thread with nothing resident but the baseline itself (no calls
+        # ever attributed) leaves it unplaced — rare enough not to chase,
+        # the same gap ``attribute()`` itself already accepts.
+        if baseline_context_share > 0 and placed_context:
+            fold_weights = [share for _event, share in placed_context]
+            for (event, _share), extra in zip(
+                placed_context, split_exact(baseline_context_share, fold_weights)
+            ):
+                event.context_tokens += extra
 
     return unplaced, unplaced_cache_read, unplaced_cost

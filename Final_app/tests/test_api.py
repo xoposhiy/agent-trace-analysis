@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from Final_app.api import app as api
 
 from .conftest import (
     PROJECT_SLUG,
+    assistant_text_line,
     assistant_tool_line,
     tool_result_line,
     user_line,
@@ -323,19 +325,25 @@ def test_the_detail_route_parses_only_its_own_session(
 def _front_loaded_reading_session(claude_home: Path) -> Path:
     """Six real-cache-read reads followed by ten edits — a missed plan-mode
     opportunity (see ``analysis/plan_mode.py`` and its own tests for why ten
-    edits, not one)."""
+    edits, not one). Each call also carries a small, realistic
+    ``input``/``output`` figure — ``price_split``'s ``as_is_cost`` is now
+    ``session.attributed_cost`` itself, which needs a non-degenerate
+    ``fresh`` channel to attribute anything at all (see
+    ``test_plan_mode._front_loaded_transcript`` for the fuller explanation).
+    """
     lines = [user_line("u1", "Fix the bug", "2026-08-01T10:00:00.000Z")]
     for i in range(6):
         when = f"2026-08-01T10:00:{i + 1:02d}.000Z"
         lines.append(assistant_tool_line(
             f"a{i}", f"msg{i}", f"t{i}", "Read", {"file_path": f"/repo/f{i}.py"},
-            when, cache_read=2_000_000,
+            when, input_tokens=50, output_tokens=40, cache_read=2_000_000,
         ))
         lines.append(tool_result_line(f"r{i}", f"t{i}", "contents", when))
     for i in range(10):
         when = f"2026-08-01T10:00:{i + 7:02d}.000Z"
         lines.append(assistant_tool_line(
             f"ae{i}", f"msg-edit{i}", f"te{i}", "Edit", {"file_path": "/repo/f0.py"}, when,
+            input_tokens=30, output_tokens=25, cache_creation=40,
         ))
         lines.append(tool_result_line(f"re{i}", f"te{i}", "ok", when))
     return write_transcript(claude_home / PROJECT_SLUG / "s.jsonl", lines)
@@ -379,6 +387,34 @@ def test_problems_endpoint_finds_a_problem_without_the_detail_page_being_opened_
     assert row["subagent_count"] == 0
 
 
+def test_problems_endpoint_scans_sessions_concurrently(
+    client: TestClient, claude_home: Path
+):
+    """Each session's detectors are dominated by a judge-LLM network call, so
+    scanning a page serially made a reasoning model's per-call latency additive
+    across the whole page. A ``threading.Barrier`` only releases once every
+    session's scan has started at the same time — if the pool ran sessions one
+    after another instead, this deadlocks and ``client.get`` raises."""
+    session_count = 3
+    for i in range(session_count):
+        write_transcript(claude_home / PROJECT_SLUG / f"concurrent{i}.jsonl", [
+            user_line(f"u{i}", "hello", "2026-08-01T10:00:00.000Z"),
+            assistant_text_line(f"a{i}", f"msg{i}", "hi", "2026-08-01T10:00:01.000Z"),
+        ])
+
+    barrier = threading.Barrier(session_count, timeout=2)
+
+    def all_sessions_scanning_at_once(session):
+        barrier.wait()
+        return []
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(api, "detect_problems", all_sessions_scanning_at_once)
+        response = client.get("/api/problems")
+
+    assert response.status_code == 200
+
+
 def test_problems_endpoint_is_empty_for_a_clean_session(
     client: TestClient, claude_home: Path, simple_session: Path
 ):
@@ -391,7 +427,9 @@ def test_problems_endpoint_is_empty_for_a_clean_session(
 
 def _two_task_session(claude_home: Path) -> Path:
     """Four prompts, two unrelated goals — a candidate for the task-switch
-    detector (see ``test_task_forest.py`` for the exact pricing shape)."""
+    detector (see ``test_task_forest.py`` for the exact pricing shape and
+    why every edit also carries a small, realistic ``input``/``output``
+    figure)."""
     lines = []
     prompts = ["Fix the login bug", "Add a test for it",
               "Now optimize the slow query", "Add an index too"]
@@ -403,7 +441,8 @@ def _two_task_session(claude_home: Path) -> Path:
             when = f"2026-08-01T10:00:{second:02d}.000Z"
             lines.append(assistant_tool_line(
                 f"a{second}", f"msg{second}", f"t{second}", "Edit",
-                {"file_path": "/repo/f.py"}, when, cache_read=500_000,
+                {"file_path": "/repo/f.py"}, when,
+                input_tokens=30, output_tokens=25, cache_read=500_000,
             ))
             second += 1
     return write_transcript(claude_home / PROJECT_SLUG / "two-task.jsonl", lines)
@@ -718,6 +757,23 @@ def test_a_block_reports_the_steps_behind_it(
     assert commands == ["pytest -k login"]
 
 
+def test_a_block_page_reports_its_context_window_share(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """A regression test for a real bug: ``_block_payload`` is a manually
+    built dict, not ``Block.as_dict()``, and it copied ``attributed_total``
+    but not the newer ``context_tokens`` — silently serving ``None`` on this
+    endpoint even though the field existed on the ``Block`` all along."""
+    session_id = simple_session.stem
+    blocks = _blocks_of(client, session_id)
+    index = next(i for i, block in enumerate(blocks) if block["kind"] == "read")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{index}").json()
+
+    assert body["context_tokens"] is not None
+    assert body["context_tokens"] == blocks[index]["context_tokens"]
+
+
 def test_a_read_block_names_the_file_it_read(
     client: TestClient, claude_home: Path, simple_session: Path
 ):
@@ -872,6 +928,23 @@ def test_a_subagent_detail_reports_its_own_retrospective_cost(
     assert body["attributed_cost"] > 0
     assert body["attributed_cost"] == pytest.approx(
         sum(b["attributed_cost"] for b in body["blocks"]))
+
+
+def test_a_subagent_detail_reports_its_own_context_window(
+    client: TestClient, claude_home: Path, session_with_subagent: Path
+):
+    """agent.js's "Context window" stat reads this field directly off the
+    subagent — a regression test for a real bug: the endpoint's manually
+    built dict omitted ``context_tokens`` entirely (present on ``Block`` but
+    never copied into the response), so the field came back ``None``."""
+    session_id = session_with_subagent.stem
+    agent_id = _first_agent_id(client, session_id)
+
+    body = client.get(f"/api/sessions/{session_id}/agents/{agent_id}").json()
+
+    assert body["context_tokens"] is not None
+    assert body["context_tokens"] > 0
+    assert body["context_tokens"] == sum(b["context_tokens"] for b in body["blocks"])
 
 
 def test_each_parallel_subagent_serves_only_its_own_work(

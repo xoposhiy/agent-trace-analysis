@@ -34,15 +34,6 @@ const backHref = agentId
 
 // --- small pieces ------------------------------------------------------
 
-function stat(key, value, title) {
-  const box = el('div');
-  box.appendChild(el('div', 'stat-k', key));
-  const valueNode = el('div', 'stat-v', value);
-  if (title) valueNode.title = title;
-  box.appendChild(valueNode);
-  return box;
-}
-
 function pill(text, className) {
   return el('span', className ? `pill ${className}` : 'pill', text);
 }

@@ -17,15 +17,6 @@ const agentSessionId = decodeURIComponent(agentParts.pop());
 
 // --- chrome ------------------------------------------------------------
 
-function stat(key, value, title) {
-  const box = el('div');
-  box.appendChild(el('div', 'stat-k', key));
-  const valueNode = el('div', 'stat-v', value);
-  if (title) valueNode.title = title;
-  box.appendChild(valueNode);
-  return box;
-}
-
 function countByKind(blocks) {
   const counts = {};
   blocks.forEach((block) => {
@@ -37,7 +28,7 @@ function countByKind(blocks) {
 // The same readout as the session page. Kept here rather than shared because
 // the two will diverge as the hover box grows; when they stop differing it
 // should move into common.js.
-function showTip(block) {
+function showTip(block, metric) {
   const tip = document.getElementById('tip');
   if (!block) {
     tip.className = 'tip tip-empty';
@@ -51,7 +42,22 @@ function showTip(block) {
 
   const facts = el('div', 'tip-facts');
   facts.appendChild(el('span', null, `${block.message_count} steps`));
-  tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+
+  if (metric === 'context') {
+    // See session.js's `showTip` for why this must not be the cumulative
+    // `tokenFacts` figure: that never sums to the bounded "Context window"
+    // header, and showing it here while the bar is sized by the bounded
+    // number is exactly the confusion this branch avoids.
+    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
+    const contextSpan = el('span', null, `${formatNumber(contextTokens)} tokens`);
+    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
+      + ` bounded context window this block currently holds — not summed`
+      + ' across every later call that re-read it (switch to the "tokens"'
+      + ' axis for that cumulative figure).';
+    facts.appendChild(contextSpan);
+  } else {
+    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  }
   facts.appendChild(costFact(block));
   facts.appendChild(el('span', null, formatDuration(block.duration_s)));
   tip.appendChild(facts);
@@ -90,9 +96,10 @@ async function load() {
   if (agent.t_start) meta.appendChild(el('span', null, absoluteTime(agent.t_start)));
 
   document.getElementById('stats').replaceChildren(
-    stat('Context window', formatNumber(tokenSplit(agent).total),
-      tokenBreakdown(tokenSplit(agent))
-      + ' — attributed to this subagent'),
+    stat('Context window', formatNumber(agent.context_tokens),
+      'The real, bounded size of this subagent\'s own last call — a'
+      + ' separate, isolated context window from the main thread\'s.'
+      + ' See DESIGN.md §7.'),
     stat('Retrospective cost', formatCost(agent.attributed_cost),
       'This subagent\'s share of the session\'s bill, priced at whichever'
       + ' model this subagent actually ran on.'),
@@ -120,11 +127,15 @@ function drawBar(agent) {
       '_blank', 'noopener');
   };
 
-  const draw = () => renderBar(document.getElementById('bar'), blocks, {
-    metric: select.value,
-    onHover: showTip,
-    onOpen: openBlock,
-  });
+  const draw = () => {
+    renderBar(document.getElementById('bar'), blocks, {
+      metric: select.value,
+      // Reads `select.value` at hover time, not draw time — see session.js.
+      onHover: (block) => showTip(block, select.value),
+      onOpen: openBlock,
+    });
+    renderMetricTotal(document.getElementById('metric-total'), agent, select.value);
+  };
 
   select.addEventListener('change', draw);
   draw();

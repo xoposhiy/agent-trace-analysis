@@ -36,6 +36,16 @@ already uses, generalised from one cut to N cuts — a direct port of the
 prototype's ``session_core.saving_for_multi_split``. Reuses
 ``plan_mode``'s own ``_session_buckets``/``_call_times``/``_main_thread_events``
 helpers rather than duplicating them.
+
+Where a cut is actually proposed is coarser than every band boundary,
+though: ``_cluster_independent_spans`` prices a split only at a genuinely
+independent task's start, never in the middle of a stretch of back-and-forth
+between RECURRING tasks (``T1, T2, T1, T2`` prices as one span, not four tiny
+ones nobody would want as four separate sessions — the whole point of
+"recurring" is that the user kept coming back, so there was never a clean
+handoff there). ``runs`` (the task-lane visualization and the problem's own
+narrative) stays band-by-band regardless — only the pricing input is
+clustered.
 """
 
 from __future__ import annotations
@@ -48,7 +58,7 @@ from Final_app.adapters import claude_code
 from Final_app.analysis import chunk_split_model as csm
 from Final_app.analysis import classify
 from Final_app.analysis import plan_mode as pm
-from Final_app.config import CACHE_DIR, JUDGE_MODEL, LLM_BASE_URL, LLM_TIMEOUT_S
+from Final_app.config import CACHE_DIR, JUDGE_MODEL, LLM_BASE_URL, LLM_TIMEOUT_S, chat_completion
 from Final_app.ir.models import EV_USER, Event, Problem, Session
 
 # ----------------------------------------------------------------------
@@ -80,6 +90,18 @@ def top_level(task_id: str) -> str:
 def is_subtask(task_id: str) -> bool:
     """True if the id is a self-contained tangent within a parent, e.g. ``T1.2``."""
     return "." in str(task_id)
+
+
+def _join_natural(items: list[str]) -> str:
+    """``["T1"]`` -> ``"T1"``; ``["T1","T2"]`` -> ``"T1 and T2"``;
+    ``["T1","T2","T3"]`` -> ``"T1, T2, and T3"``."""
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
 
 
 def compress_timeline(assignments: list[str]) -> list[tuple[str, int, int]]:
@@ -120,6 +142,55 @@ def detect_interleaving(assignments: list[str]) -> dict:
         "num_switches": max(len(runs) - 1, 0),
         "recurring": sorted(tl for tl, n in counts.items() if n > 1),
     }
+
+
+def _cluster_independent_spans(
+    bands: list[tuple[str, int, int]], recurring: set
+) -> list[tuple[int, int]]:
+    """Group ``bands`` (top-level, from ``_top_level_bands``) into the spans
+    worth pricing a split at — one per GENUINELY independent task, but a
+    whole stretch of back-and-forth between recurring tasks as a single
+    span, never split at every switch within it.
+
+    Splitting a real interleaving (``T1, T2, T1, T2``) at every switch prices
+    four tiny chunks nobody would actually want as four separate sessions —
+    the whole point of "recurring" is that the user kept coming back, so
+    there was never a clean handoff to price in the first place. A switch
+    INTO a task that never recurs again, though, is a real candidate: the
+    user is genuinely done with whatever came before.
+
+    Implemented as each top-level id's last-occurrence index acting as a
+    "reach": while walking bands left to right, a recurring id currently in
+    the open span extends how far that span must run (to its own last
+    occurrence, and transitively to any other recurring id's last occurrence
+    absorbed along the way) — the same shape as merging overlapping
+    intervals. A span closes the moment the walk passes every currently
+    known reach, and the next band starts a new one.
+
+    Returns ``(start_band_index, end_band_index)`` pairs, inclusive, in
+    order. Empty in, empty out.
+    """
+    if not bands:
+        return []
+
+    last_occurrence: dict[str, int] = {}
+    for index, (task_id, _, _) in enumerate(bands):
+        last_occurrence[task_id] = index
+
+    spans: list[tuple[int, int]] = []
+    start = 0
+    reach = last_occurrence[bands[0][0]] if bands[0][0] in recurring else 0
+    for index in range(1, len(bands)):
+        if index > reach:
+            spans.append((start, index - 1))
+            start = index
+            reach = last_occurrence[bands[index][0]] if bands[index][0] in recurring else index
+        else:
+            task_id = bands[index][0]
+            if task_id in recurring:
+                reach = max(reach, last_occurrence[task_id])
+    spans.append((start, len(bands) - 1))
+    return spans
 
 
 def _top_level_bands(timeline: list[tuple[str, int, int]]) -> list[tuple[str, int, int]]:
@@ -261,8 +332,15 @@ def judge_task_forest(prompt_texts: list[str]) -> Optional[dict]:
 
     Returns the parsed ``{tasks, assignments, summary}`` dict, or ``None`` —
     never raised — on any failure: LLM unavailable, network/auth error, or a
-    response that doesn't parse as JSON. Cached on disk by content hash, so a
-    session already judged is never re-judged.
+    response that doesn't parse as JSON.
+
+    Only a SUCCESSFUL judgment is cached. A failure (a timeout, in particular)
+    used to be written to the cache as ``None`` just the same as a genuine
+    "no split-worthy pattern here" verdict — permanently, since the cache is
+    checked before any call is made. Against a reasoning model whose calls can
+    legitimately take 40s+, that baked in real timeouts as false negatives
+    forever; not caching failures means a timed-out session is simply retried
+    on the next scan instead.
     """
     if not classify.llm_available():
         return None
@@ -278,7 +356,8 @@ def judge_task_forest(prompt_texts: list[str]) -> Optional[dict]:
 
         client = (OpenAI(base_url=LLM_BASE_URL, timeout=LLM_TIMEOUT_S)
                   if LLM_BASE_URL else OpenAI(timeout=LLM_TIMEOUT_S))
-        response = client.chat.completions.create(
+        response = chat_completion(
+            client,
             model=JUDGE_MODEL, max_tokens=8000, temperature=0,
             messages=[{"role": "user", "content": build_task_forest_prompt(prompt_texts)}],
         )
@@ -290,8 +369,9 @@ def judge_task_forest(prompt_texts: list[str]) -> Optional[dict]:
     except Exception:
         forest = None
 
-    cache[key] = forest
-    _save_cache()
+    if forest is not None:
+        cache[key] = forest
+        _save_cache()
     return forest
 
 
@@ -305,7 +385,15 @@ def price_multi_split(session: Session, fractions: list[float],
 
     The N-way generalisation of ``plan_mode.price_split``: builds arbitrary
     chunk heights from the (deduped, sorted) cut fractions along the linear
-    context ramp, using the same unmodified ``chunk_split_model`` functions.
+    context ramp, using the same unmodified ``chunk_split_model`` functions
+    for ``split_cost`` — priced at ``pm._rates_for_session(session)``, this
+    session's own real per-model rate, plus any subagent spend
+    (``pm._subagent_cost``) added on top, since a subagent's own cost does
+    not change when the main thread's tasks are split apart.
+
+    ``as_is_cost`` is simply ``session.attributed_cost`` — the same exact
+    figure "Retrospective cost" shows, not a second estimate that can
+    disagree with it. See ``plan_mode.price_split`` for the full reasoning.
     Returns ``None`` when the session doesn't fit the ramp model, or no
     fraction survives the 5%/95% degenerate-split guard.
     """
@@ -334,18 +422,21 @@ def price_multi_split(session: Session, fractions: list[float],
     if any(h <= 0 for h in heights):
         return None
 
+    rates = pm._rates_for_session(session)
+    subagent_cost = pm._subagent_cost(session)
     calls = csm.calls_per_chunk(heights, api_calls, peak)
     cache_read_split = csm.cache_read_after_split(heights, api_calls, peak)
 
     overhead = 0.0
     for j in range(1, len(heights)):
         summary_tok = csm.summary_tokens(heights[j - 1], alpha)
-        chunk_overhead, *_ = csm.summary_overhead_cost([calls[j]], summary_tok)
+        chunk_overhead, *_ = csm.summary_overhead_cost([calls[j]], summary_tok, rates)
         overhead += chunk_overhead
 
-    as_is = csm.full_session_cost(input_tok, output_tok, cache_write_tok, cache_read_tok)
-    split = csm.base_cost_after_split(input_tok, output_tok, cache_write_tok,
-                                      cache_read_split) + overhead
+    as_is = session.attributed_cost
+    split = (csm.base_cost_after_split(input_tok, output_tok, cache_write_tok,
+                                       cache_read_split, rates)
+             + overhead + subagent_cost)
     dollar_saving = as_is - split
     percent_saving = (100.0 * dollar_saving / as_is) if as_is else 0.0
 
@@ -420,8 +511,12 @@ def detect(session: Session) -> Optional[Problem]:
     prompt_ts = [e.ts for e in prompt_events]
     call_times = pm._call_times(pm._main_thread_events(session))
 
+    # ``runs`` stays one entry per BAND — the task lane still shows every
+    # switch the judge found, granular, for transparency. Only the PRICING
+    # input is coarser: a split fraction only at a genuinely independent
+    # task's start, never in the middle of a stretch of interleaving. See
+    # ``_cluster_independent_spans``.
     runs: list[dict] = []
-    fractions: list[float] = []
     labels = {task.get("id"): task.get("label", "") for task in forest.get("tasks", [])}
     for index, (task_id, start_msg, end_msg) in enumerate(bands):
         start_ts = prompt_ts[start_msg - 1]
@@ -432,8 +527,24 @@ def detect(session: Session) -> Optional[Problem]:
             "start_ts": start_ts.isoformat(),
             "end_ts": end_ts.isoformat() if end_ts else None,
         })
-        if index > 0:
-            fractions.append(_fraction_at(call_times, start_ts))
+
+    spans = _cluster_independent_spans(bands, set(interleave["recurring"]))
+    fractions = [
+        _fraction_at(call_times, prompt_ts[bands[start_band][1] - 1])
+        for start_band, _end_band in spans[1:]
+    ]
+
+    # What each PRICED chunk actually contains — one entry per span, so a
+    # chunk that merged an interleaved stretch reads as "T1 and T2", not
+    # silently as just whichever id happened to start it.
+    chunks: list[dict] = []
+    for start_band, end_band in spans:
+        task_ids = list(dict.fromkeys(
+            bands[i][0] for i in range(start_band, end_band + 1)))
+        chunks.append({
+            "task_ids": task_ids,
+            "label": _join_natural(task_ids),
+        })
 
     saving = price_multi_split(session, fractions)
     if saving is None:
@@ -449,11 +560,22 @@ def detect(session: Session) -> Optional[Problem]:
     distinct_tasks = [{"id": task_id, "label": labels.get(task_id, task_id)}
                       for task_id in dict.fromkeys(tl for tl, _, _ in bands)]
     task_names = ", ".join(f"{task['id']} ({task['label']})" for task in distinct_tasks)
+    # ``num_chunks`` is the number of SPANS actually priced
+    # (``_cluster_independent_spans``), not the number of switches — a
+    # stretch of back-and-forth between recurring tasks prices as one chunk,
+    # so this must say how many chunks, never "at each switch" (stale
+    # wording from before clustering existed, and actively wrong now: a
+    # session can have far more switches than priced chunks).
+    num_chunks = saving["num_chunks"]
+    chunk_note = (
+        " (keeping each returned-to task's back-and-forth together)"
+        if interleave["recurring"] else ""
+    )
     detail = (
         f"This session pursued {len(distinct_tasks)} independent tasks — "
-        f"{task_names}. Splitting into separate sessions at each switch "
-        f"could have saved an estimated {saving['percent_saving']:.0f}% "
-        f"(${saving['dollar_saving']:.2f})."
+        f"{task_names}. Splitting into {num_chunks} separate sessions"
+        f"{chunk_note} could have saved an estimated "
+        f"{saving['percent_saving']:.0f}% (${saving['dollar_saving']:.2f})."
     )
 
     return Problem(
@@ -465,6 +587,7 @@ def detect(session: Session) -> Optional[Problem]:
             **saving,
             "tasks": distinct_tasks,
             "runs": runs,
+            "chunks": chunks,
             "recurring": interleave["recurring"],
             "num_switches": interleave["num_switches"],
         },
