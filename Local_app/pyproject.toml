@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-split-advisor"
+version = "0.1.0"
+description = "Scan your local Claude Code sessions and suggest worthwhile semantic splits (cost-saving)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+# The default (heuristic) path is pure-stdlib: no runtime dependencies.
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed for the LLM task-forest judge + summaries. python-dotenv lets the
+# provider settings live in a project .env instead of shell exports (optional).
+llm = ["openai>=1.0", "python-dotenv>=1.0"]
+# The local web dashboard (`split-advisor serve`): FastAPI app + the LLM extra.
+web = ["fastapi>=0.100", "uvicorn>=0.20", "openai>=1.0", "python-dotenv>=1.0",
+	"datasets>=2.0", "huggingface_hub>=0.20"]
+# Optional extras for the SWE-chat dataset path used by `main.py` and the app.
+swechat = ["datasets>=2.0", "huggingface_hub>=0.20"]
+
+[project.scripts]
+# Installs a `split-advisor` command on PATH that works from any directory.
+split-advisor = "split_advisor:main"
+
+[tool.setuptools]
+# Flat layout: self-contained runtime modules (main.py is the research/dataset
+# script and is intentionally NOT packaged — it needs datasets/hf).
+py-modules = ["split_advisor", "session_core", "chunk_split_model", "analysis_api"]
+# The web dashboard is a package with bundled static assets.
+packages = ["web"]
+
+[tool.setuptools.package-data]
+web = ["static/*"]

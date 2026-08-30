@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Problem · TraceLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="back-row">
+      <a class="back" id="back" href="/">← back to the session</a>
+      <a class="back" href="/#problems">← back to problems</a>
+    </div>
+
+    <div class="detail-head">
+      <h2 id="title">Loading…</h2>
+      <div class="row-meta" id="meta"></div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="legend" id="legend"></div>
+
+    <div class="filters">
+      <div class="field">
+        <label for="f-metric">Y axis</label>
+        <select id="f-metric">
+          <option value="cost">retrospective cost</option>
+          <option value="context" selected>context window</option>
+          <option value="time">time</option>
+          <option value="messages">messages</option>
+        </select>
+      </div>
+      <span class="metric-total" id="metric-total"></span>
+      <span class="spacer"></span>
+    </div>
+
+    <div class="problem-stage">
+      <div class="bar-col">
+        <div class="bar-row">
+          <div id="bar"></div>
+          <div id="bar-arrow" class="bar-arrow" hidden>→</div>
+          <div id="plan-mode-bar"></div>
+          <div id="task-forest-bar"></div>
+        </div>
+      </div>
+      <div>
+        <div id="tip" class="tip" hidden></div>
+        <div class="stats" id="problem-stats"></div>
+        <div id="problem-chunks"></div>
+        <p id="detail" class="row-detail"></p>
+        <p id="justification" class="row-justification"></p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/bar.js"></script>
+  <script src="/static/plan_mode.js"></script>
+  <script src="/static/task_forest.js"></script>
+  <script src="/static/problem.js"></script>
+</body>
+</html>

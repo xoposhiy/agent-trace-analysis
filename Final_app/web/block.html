@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Block · TraceLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" id="back" href="/">← back to the session</a>
+
+    <div class="detail-head">
+      <h2 id="title">Loading…</h2>
+      <div class="row-meta" id="meta"></div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <!-- Subagents only: one card per agent under this band, each with its own
+         steps. Stays empty for every other kind. -->
+    <div id="agents"></div>
+
+    <h3 class="section-h" id="steps-h">Steps</h3>
+    <div id="steps"></div>
+  </div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/block.js"></script>
+</body>
+</html>

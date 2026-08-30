@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Subagent · TraceLens</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" id="back" href="/">← back to the delegation</a>
+
+    <div class="detail-head">
+      <h2 id="title">Loading…</h2>
+      <div class="row-meta" id="meta"></div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="legend" id="legend"></div>
+
+    <div class="filters">
+      <div class="field">
+        <label for="f-metric">Y axis</label>
+        <select id="f-metric">
+          <option value="cost">retrospective cost</option>
+          <option value="context" selected>context window</option>
+          <option value="time">time</option>
+          <option value="messages">messages</option>
+        </select>
+      </div>
+      <span class="metric-total" id="metric-total"></span>
+      <span class="spacer"></span>
+      <span class="soon" id="block-count"></span>
+    </div>
+
+    <div class="stage">
+      <div class="bar-col">
+        <div id="bar"></div>
+      </div>
+      <div>
+        <div id="tip" class="tip" hidden></div>
+        <div id="pane" class="placeholder">Click a block for its steps.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/bar.js"></script>
+  <script src="/static/agent.js"></script>
+</body>
+</html>

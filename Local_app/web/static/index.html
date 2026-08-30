@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Split Advisor</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Claude Split Advisor</h1>
+      <p>Your Claude Code sessions, segmented into a forest of tasks — split points priced locally. Nothing is uploaded.</p>
+      <p class="note">“User prompt N” = your <b>N</b>th typed prompt (user prompt 1 = your first). “Agent step N” = the <b>N</b>th agent action after a prompt (one tool call or reply) — one user prompt usually spans many agent steps, and the cost math (context growth, phases) is measured in agent steps.</p>
+    </header>
+
+    <div class="toolbar">
+      <button id="refresh" class="refresh">Refresh</button>
+      <label><input type="checkbox" id="useLlm" checked /> Use LLM (task forest)</label>
+      <label class="src-group">
+        <span>Source</span>
+        <select id="sourceSelect">
+          <option value="local">Local traces</option>
+          <option value="swe-chat">SWE-chat repo</option>
+        </select>
+      </label>
+      <label class="src-group source-only swe-chat-only" id="repoGroup">
+        <span>Repo filter</span>
+        <input id="repoFilter" type="text" value="entireio/cli" />
+      </label>
+      <label class="src-group source-only swe-chat-only" id="splitGroup">
+        <span>Split</span>
+        <input id="datasetSplit" type="text" value="train" />
+      </label>
+      <span id="status" class="status"></span>
+    </div>
+
+    <!-- LLM diagnostics banner: after a refresh, says whether the LLM was actually
+         used, or why it fell back to structural-only (hidden until first refresh). -->
+    <div id="llmBanner" class="llm-banner" hidden></div>
+
+    <div class="tiles">
+      <div class="tile"><div class="k">Sessions scanned</div><div class="v" id="tScanned">—</div></div>
+      <div class="tile"><div class="k">Worth splitting</div><div class="v" id="tWorth">—</div></div>
+      <div class="tile"><div class="k">Total modelled cost</div><div class="v" id="tCost">—</div></div>
+      <div class="tile"><div class="k">Saving if acted on</div><div class="v good" id="tSave">—</div></div>
+    </div>
+
+    <div class="filters">
+      <div class="f">
+        <span class="lbl">Project</span>
+        <select id="fProject"><option value="">All projects</option></select>
+      </div>
+      <div class="f">
+        <span class="lbl">Sort by</span>
+        <select id="fSort">
+          <option value="dollars">Saving $ (then %)</option>
+          <option value="pct">Saving % (then $)</option>
+        </select>
+      </div>
+      <div class="f">
+        <span class="lbl">Min saving %: <b id="lblPct">10</b></span>
+        <input type="range" id="fPct" min="0" max="40" step="1" value="10" />
+      </div>
+      <div class="f">
+        <span class="lbl">Min saving $: <b id="lblDollars">0.50</b></span>
+        <input type="range" id="fDollars" min="0" max="10" step="0.25" value="0.5" />
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="splits">Split suggestions</button>
+      <button class="tab" data-tab="planmode">Plan-mode opportunities</button>
+    </div>
+
+    <div id="list"></div>
+  </div>
+
+  <!-- per-session graph modal (populated by app.js) -->
+  <div id="modal" class="modal-overlay" hidden>
+    <div class="modal-panel">
+      <button id="modalClose" class="modal-close" aria-label="Close">×</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

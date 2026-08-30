@@ -1,0 +1,687 @@
+:root {
+  --bg: #0b0d10;
+  --panel: #14171c;
+  --panel-2: #1a1e24;
+  --line: #262c34;
+  --text: #e6e9ef;
+  --muted: #8b95a5;
+  --accent: #5b8dff;
+  --accent-dim: #2b3f6b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.wrap {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 24px 64px;
+}
+
+/* --- header ------------------------------------------------------- */
+
+header.top {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sub { color: var(--muted); font-size: 13px; }
+
+/* --- tabs --------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
+}
+
+.tab {
+  appearance: none;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 9px 14px;
+  margin-bottom: -1px;
+}
+
+.tab:hover { color: var(--text); }
+
+.tab[aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.panel[hidden] { display: none; }
+
+/* --- filters ------------------------------------------------------ */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+
+.field label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+select, button.action {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 7px 10px;
+}
+
+select:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+button.action { cursor: pointer; }
+button.action:hover:not(:disabled) { border-color: var(--accent-dim); }
+button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6; }
+
+.spacer { flex: 1; }
+
+.soon {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.metric-total {
+  color: var(--muted);
+  font-size: 12.5px;
+  /* Centered against the SELECT box specifically, not the taller label+select
+     `.field` beside it — `align-self: center` centered it against that whole
+     field instead, landing well above the dropdown's real vertical middle
+     (measured on a real render: the field is 55.5px tall including its
+     label, the select alone only 34px, and the select's own center sits
+     ~11px below the field's). Re-measure and adjust if the label's or
+     select's font size or padding ever change. */
+  align-self: flex-start;
+  margin-top: 29px;
+}
+
+/* --- session list ------------------------------------------------- */
+
+.list { display: flex; flex-direction: column; gap: 8px; }
+
+.row {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px 15px;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.row:hover {
+  background: var(--panel-2);
+  border-color: var(--accent-dim);
+}
+
+.row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.row-title {
+  font-weight: 550;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+
+
+.row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A problem row's own session title, inside its .row-meta line — brighter
+   than the surrounding muted stats so the session it belongs to still
+   reads clearly next to them. */
+.row-session-title { color: var(--text); font-weight: 550; }
+
+.sid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+/* The problem-list row's own detail sentence, under its title/meta line —
+   same slot .row-meta occupies on a session row, but this is prose rather
+   than a run of stat pills, so it gets its own class and line-height. This
+   IS the answer to "why was this suggested", so it is sized to be read, not
+   glanced past the way a metadata line is. */
+.row-detail { color: var(--text); font-size: 14.5px; line-height: 1.5; margin-top: 10px; }
+
+/* The LLM-written one-sentence justification (see `analysis.plan_mode.justify`)
+   — present only when the judge was reachable. The most load-bearing text in
+   the row (the actual *reason*, grounded in what was read), so it gets full
+   text colour and an accent rule rather than reading as a muted aside. Empty
+   and margin-less when there is none, so it never leaves a visible gap. */
+.row-justification {
+  color: var(--text);
+  font-size: 14.5px;
+  font-style: italic;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--accent);
+}
+.row-justification:empty { margin: 0; padding: 0; border: 0; }
+
+.pill-severity-high { background: rgba(214, 69, 69, 0.16); color: #ef8080; }
+.pill-severity-medium { background: rgba(229, 148, 0, 0.16); color: #e5a63a; }
+.pill-severity-low { background: rgba(91, 141, 255, 0.14); color: #8fb3ff; }
+.pill-severity-info { background: var(--panel-2); color: var(--muted); }
+
+.pill {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* --- load more ----------------------------------------------------- */
+
+/* Paging is a deliberate click, not infinite scroll — each page costs the
+   server real transcript parsing. */
+.more {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.more:empty { display: none; }
+
+.more-count {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- states ------------------------------------------------------- */
+
+.empty-state, .error {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 40px 20px;
+  text-align: center;
+}
+
+.error { border-color: #5c2b2b; color: #e08a8a; }
+
+/* The LLM banner is a left-aligned block with a heading, hints and a Retry
+   button — not the centred one-liner `.error` is otherwise used for. */
+.error-llm {
+  border-style: solid;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.error-title { font-weight: 550; }
+
+.error-hint { color: var(--muted); font-size: 12.5px; }
+
+.error-llm button.action { margin-top: 4px; }
+
+/* A working LLM says so. A missing banner would be indistinguishable from a
+   check that never ran. */
+.note-ok { border-left-color: #2f7a55; }
+
+.note {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent-dim);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-bottom: 16px;
+  padding: 10px 13px;
+}
+
+/* --- session detail ----------------------------------------------- */
+
+.back { color: var(--muted); font-size: 13px; }
+.back:hover { color: var(--text); }
+
+.back-row { display: flex; gap: 16px; align-items: baseline; }
+
+.detail-head { margin: 14px 0 20px; }
+.detail-head h2 { margin: 0 0 6px; font-size: 19px; font-weight: 600; }
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  margin: 18px 0 24px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.stat-k {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stat-v {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+/* The problem page's own layout (problem.html): its first column holds two
+   bars side by side (plan-mode's cut bar, ~122px) OR the plain bar plus a
+   task-forest bar whose rail + text labels need real room — sized for the
+   wider case, so plan-mode's page just has slack space. */
+.problem-stage {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.placeholder {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 380px;
+  padding: 20px;
+  text-align: center;
+}
+
+/* --- the vertical bar --------------------------------------------- */
+
+/* The bar is as tall as its block count needs (see `barHeight` in bar.js) and
+   scrolls inside a sticky column, rather than being squashed to one screen. */
+.bar-col {
+  position: sticky;
+  top: 20px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* The problem page's two bars (see plan_mode.js): the session's own bar,
+   unmodified, beside the same bar with a gap cut into it at the split point —
+   "this bar, cut here" laid out for direct comparison. */
+.bar-row { display: flex; align-items: flex-start; gap: 6px; }
+
+#bar svg, #plan-mode-bar svg { display: block; }
+
+/* Between the two bars — reads as "this session becomes this", pointing from
+   the plain bar to the split one. */
+.bar-arrow {
+  align-self: center;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* --- the task-forest lane (see task_forest.js) ----------------------- */
+
+/* The rail (a plain SVG) and the label column sit side by side, next to the
+   one real `#bar` — this draws no bar of its own. */
+.task-forest-wrap { display: flex; align-items: flex-start; gap: 10px; }
+
+.task-forest-wrap svg { display: block; }
+
+/* Given an explicit width/height in task_forest.js (not implied by its
+   absolutely-positioned children, which contribute nothing to a parent's own
+   box — that omission is what left the whole lane collapsed to zero width
+   before this). */
+.task-forest-labels { position: relative; flex: none; }
+
+.task-forest-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.task-forest-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* Hover and keyboard focus get the same treatment — the bar is reachable
+   by Tab, so focus must be as visible as hover. */
+.blk { cursor: pointer; outline: none; }
+.blk:hover rect, .blk:focus rect { fill-opacity: 1; }
+.blk:hover > rect:first-child,
+.blk:focus > rect:first-child {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+/* --- hover readout ------------------------------------------------- */
+
+/* A floating tooltip anchored to the hovered block (positioned in JS by
+   `positionTip`, common.js) rather than a fixed panel sitting in the page's
+   own flow. A fixed panel kept showing whichever block it last described
+   after `.bar-col` was scrolled with the mouse held still, because a browser
+   never re-fires `mouseenter`/`mouseleave` on scroll alone — only on real
+   pointer movement — so the block visually under the cursor after scrolling
+   was not the one the panel still named. `hidden` (toggled in JS) keeps it
+   out of layout entirely when nothing is hovered, rather than reserving
+   space for a permanent "hover a block" placeholder. */
+.tip {
+  position: fixed;
+  z-index: 40;
+  /* Wide enough to carry a full sentence-length label or chat message without
+     wrapping onto a dozen lines — the right side of the page is otherwise
+     empty, so there is no reason to squeeze this back down to a narrow
+     column the way a truly fixed-width tooltip would have to. */
+  max-width: 560px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  padding: 14px 18px;
+  /* The tip only ever describes whatever the pointer is over; it must never
+     itself be what the pointer is over, or it would steal the `mouseleave`
+     that is supposed to dismiss it. */
+  pointer-events: none;
+}
+
+.tip-kind {
+  font-weight: 550;
+  font-size: 14px;
+  margin-bottom: 7px;
+  /* The label can now run to a full sentence (analysis.labels' MAX_LABEL) —
+     wrap it rather than eliding it, since the tip has room to grow instead
+     of being pinned to one line. */
+  white-space: normal;
+  word-break: break-word;
+}
+
+.tip-facts {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 14px;
+}
+
+.tip-desc {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* --- legend -------------------------------------------------------- */
+
+/* Sits right under the header stats now (moved 2026-08-27) rather than
+   trailing the bar — a stable legend of what the colours mean reads better
+   as part of the page's chrome than as a footnote below a bar that can run
+   to hundreds of blocks and several screens tall. */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 22px;
+  margin-bottom: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.legend-item { align-items: center; display: flex; gap: 7px; }
+
+/* A kind absent from this session stays listed but recedes, so the legend
+   is a stable reference rather than changing shape per session. */
+.legend-item-off { opacity: 0.35; }
+
+.legend-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.swatch { display: block; flex: none; }
+
+/* --- block detail page --------------------------------------------- */
+/* Reached by clicking a block on the bar. The page is a vertical stack of
+   step cards rather than a table: a Bash command or a patch is the reason
+   someone opened it, and a table column would clip exactly that. */
+
+.section-h {
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  margin: 26px 0 14px;
+  padding-top: 16px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.step {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  padding: 12px 14px;
+}
+
+.step-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+/* Tabular so the numbers form a column the eye can run down, however many
+   digits a step index reaches. */
+.step-n {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  min-width: 22px;
+}
+
+.step-title { font-weight: 550; word-break: break-word; }
+
+.step-when { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+.step-facts {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 14px;
+  margin: 7px 0 0 22px;
+}
+
+.step-text {
+  border-left: 2px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  margin: 9px 0 0 22px;
+  padding-left: 10px;
+}
+
+/* --- arguments and results ------------------------------------------ */
+
+.args { margin: 9px 0 0 22px; }
+
+.arg { display: flex; gap: 10px; margin-bottom: 6px; }
+
+.arg-k {
+  color: var(--muted);
+  flex: none;
+  font-size: 12px;
+  padding-top: 2px;
+  width: 92px;
+}
+
+.arg-v, .result-body {
+  background: var(--panel-2);
+  border-radius: 6px;
+  flex: 1;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 7px 9px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.result { margin: 9px 0 0 22px; }
+
+/* A failed step is marked by the rail as well as the word, so the failure
+   survives being read in greyscale. */
+.result-error { border-left: 2px solid #d64545; padding-left: 8px; }
+
+.result-head {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+.result-k { letter-spacing: 0.03em; text-transform: uppercase; }
+
+.result-error .result-k { color: #d64545; }
+
+.result-body { max-height: 260px; overflow-y: auto; }
+
+/* Says the text is a prefix. Without it a clipped command reads as a
+   complete one, which is worse than showing nothing. */
+.clipped { color: var(--muted); font-style: italic; }
+
+.muted { color: var(--muted); font-size: 12px; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* --- subagent cards -------------------------------------------------- */
+
+.agent {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid #e59400;
+  border-radius: 8px;
+  margin-bottom: 14px;
+  padding: 13px 15px;
+}
+
+.agent-head { align-items: baseline; display: flex; flex-wrap: wrap; gap: 10px; }
+
+.agent-n { color: #e59400; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.agent-title { font-weight: 550; }
+
+/* The agent's own steps are inset, so a band covering three agents reads as
+   three groups rather than one long list. */
+.agent-steps { margin-top: 12px; padding-left: 12px; }
+
+.agent-steps .step { background: var(--panel-2); }
+
+.pill-error { background: rgba(214, 69, 69, 0.16); color: #ef8080; }
+
+/* A subagent card is a link to that agent's own bar. Styled as a card rather
+   than inline text because it is the primary action of a delegation page. */
+.agent-link {
+  color: inherit;
+  display: block;
+  text-decoration: none;
+  transition: border-color 0.12s ease;
+}
+
+.agent-link:hover, .agent-link:focus {
+  border-color: #e59400;
+  outline: none;
+}
+
+.agent-go {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.agent-link:hover .agent-go, .agent-link:focus .agent-go { color: #e59400; }
+
+.kind-subagent { background: rgba(229, 148, 0, 0.16); color: #e5a63a; }
