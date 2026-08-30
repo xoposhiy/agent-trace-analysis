@@ -123,7 +123,15 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 .metric-total {
   color: var(--muted);
   font-size: 12.5px;
-  align-self: center;
+  /* Centered against the SELECT box specifically, not the taller label+select
+     `.field` beside it — `align-self: center` centered it against that whole
+     field instead, landing well above the dropdown's real vertical middle
+     (measured on a real render: the field is 55.5px tall including its
+     label, the select alone only 34px, and the select's own center sits
+     ~11px below the field's). Re-measure and adjust if the label's or
+     select's font size or padding ever change. */
+  align-self: flex-start;
+  margin-top: 29px;
 }
 
 /* --- session list ------------------------------------------------- */
@@ -424,18 +432,44 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
 
 /* --- hover readout ------------------------------------------------- */
 
+/* A floating tooltip anchored to the hovered block (positioned in JS by
+   `positionTip`, common.js) rather than a fixed panel sitting in the page's
+   own flow. A fixed panel kept showing whichever block it last described
+   after `.bar-col` was scrolled with the mouse held still, because a browser
+   never re-fires `mouseenter`/`mouseleave` on scroll alone — only on real
+   pointer movement — so the block visually under the cursor after scrolling
+   was not the one the panel still named. `hidden` (toggled in JS) keeps it
+   out of layout entirely when nothing is hovered, rather than reserving
+   space for a permanent "hover a block" placeholder. */
 .tip {
+  position: fixed;
+  z-index: 40;
+  /* Wide enough to carry a full sentence-length label or chat message without
+     wrapping onto a dozen lines — the right side of the page is otherwise
+     empty, so there is no reason to squeeze this back down to a narrow
+     column the way a truly fixed-width tooltip would have to. */
+  max-width: 560px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  margin-bottom: 12px;
-  min-height: 62px;
-  padding: 11px 14px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  padding: 14px 18px;
+  /* The tip only ever describes whatever the pointer is over; it must never
+     itself be what the pointer is over, or it would steal the `mouseleave`
+     that is supposed to dismiss it. */
+  pointer-events: none;
 }
 
-.tip-empty { color: var(--muted); font-style: italic; }
-
-.tip-kind { font-weight: 550; margin-bottom: 5px; }
+.tip-kind {
+  font-weight: 550;
+  font-size: 14px;
+  margin-bottom: 7px;
+  /* The label can now run to a full sentence (analysis.labels' MAX_LABEL) —
+     wrap it rather than eliding it, since the tip has room to grow instead
+     of being pinned to one line. */
+  white-space: normal;
+  word-break: break-word;
+}
 
 .tip-facts {
   color: var(--muted);
@@ -450,18 +484,22 @@ button.action:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.6;
   color: var(--muted);
   font-size: 12px;
   margin-top: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* --- legend -------------------------------------------------------- */
 
+/* Sits right under the header stats now (moved 2026-08-27) rather than
+   trailing the bar — a stable legend of what the colours mean reads better
+   as part of the page's chrome than as a footnote below a bar that can run
+   to hundreds of blocks and several screens tall. */
 .legend {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
   margin-top: 22px;
+  margin-bottom: 22px;
   padding-top: 16px;
   border-top: 1px solid var(--line);
   font-size: 12.5px;

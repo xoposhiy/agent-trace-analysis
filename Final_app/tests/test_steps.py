@@ -28,7 +28,8 @@ from Final_app.ir.models import (
 
 
 def _event(tool_name=None, tool_input=None, result=None, text="",
-           message_id="msg1", second=0, attributed=0) -> Event:
+           message_id="msg1", second=0, attributed=0, cache_read=0,
+           context=0) -> Event:
     return Event(
         uuid=f"u{second}",
         ts=datetime(2026, 8, 4, 9, 0, second, tzinfo=timezone.utc),
@@ -37,6 +38,8 @@ def _event(tool_name=None, tool_input=None, result=None, text="",
         model="claude-opus-5",
         text=text,
         attributed_tokens=attributed,
+        attributed_cache_read=cache_read,
+        context_tokens=context,
         tokens=Tokens(output=10),
         tool=None if tool_name is None else ToolCall(
             id=f"t{second}", name=tool_name,
@@ -189,6 +192,24 @@ def test_an_empty_block_summarises_to_zeroes():
 # ----------------------------------------------------------------------
 # The shared describe helper
 # ----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------
+# The token figures the block detail page reads per step
+# ----------------------------------------------------------------------
+
+def test_a_step_reports_its_own_context_window_share_separately_from_billed_totals():
+    # `context_tokens` (this call's real, bounded contribution) must not be
+    # confused with `attributed_tokens`/`attributed_cache_read` (cumulative
+    # across the whole session) — the three answer different questions and the
+    # detail page shows all three side by side.
+    event = _event("Read", {"file_path": "/repo/a.py"},
+                   attributed=120, cache_read=340, context=90)
+    step = block_steps(Block(kind="read", events=[event]))[0]
+
+    assert step["context_tokens"] == 90
+    assert step["attributed_tokens"] == 120
+    assert step["attributed_cache_read"] == 340
+
 
 def test_describe_falls_back_through_the_input_fields():
     assert describe_event(_event("Grep", {"pattern": "TODO"})) == "Grep TODO"

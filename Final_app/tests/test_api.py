@@ -774,6 +774,22 @@ def test_a_block_page_reports_its_context_window_share(
     assert body["context_tokens"] == blocks[index]["context_tokens"]
 
 
+def test_a_blocks_steps_each_report_their_own_context_window_share(
+    client: TestClient, claude_home: Path, simple_session: Path
+):
+    """The detail page's per-step "+N tokens to context window" figure needs
+    ``context_tokens`` on every step, not only the block-level rollup."""
+    session_id = simple_session.stem
+    blocks = _blocks_of(client, session_id)
+    index = next(i for i, block in enumerate(blocks) if block["kind"] == "read")
+
+    body = client.get(f"/api/sessions/{session_id}/blocks/{index}").json()
+
+    assert body["steps"]
+    for step in body["steps"]:
+        assert "context_tokens" in step
+
+
 def test_a_read_block_names_the_file_it_read(
     client: TestClient, claude_home: Path, simple_session: Path
 ):

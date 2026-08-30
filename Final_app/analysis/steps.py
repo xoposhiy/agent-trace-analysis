@@ -39,6 +39,14 @@ MAX_ARG_CHARS = 400
 MAX_RESULT_CHARS = 600
 MAX_TEXT_CHARS = 600
 
+# The headline this feeds (a block's own label, and a step's title) used to be
+# read only in a fixed-width one-line tooltip, which is why this was 120. The
+# hover tip is now a floating box that wraps (`web/common.js`'s
+# `fillBlockTip`, `style.css`'s `.tip`), so the ceiling only needs to guard
+# against a truly pathological single line (a whole file inlined into a
+# ``description``, say) rather than a normal sentence or command.
+MAX_HEADLINE_CHARS = 400
+
 
 def _clip(text: str, limit: int) -> tuple[str, bool]:
     """``(text, was_clipped)`` — never a bare prefix passed off as the whole."""
@@ -60,8 +68,8 @@ def describe_event(event: Event) -> str:
                   or event.tool.input.get("description")
                   or "")
         target = " ".join(str(target).split())
-        return f"{event.tool.name} {target}".strip()[:120]
-    return " ".join((event.text or "").split())[:120]
+        return f"{event.tool.name} {target}".strip()[:MAX_HEADLINE_CHARS]
+    return " ".join((event.text or "").split())[:MAX_HEADLINE_CHARS]
 
 
 # ----------------------------------------------------------------------
@@ -128,6 +136,11 @@ def step_dict(event: Event, index: int) -> dict:
         "text_truncated": text_truncated,
         "attributed_tokens": event.attributed_tokens,
         "attributed_cache_read": event.attributed_cache_read,
+        # This step's own share of its thread's real, bounded context window —
+        # what the block detail page's "+N tokens to context window" reads.
+        # Distinct from `attributed_tokens`/`attributed_cache_read` above,
+        # which are cumulative across the whole session (DESIGN.md §7).
+        "context_tokens": event.context_tokens,
         "content_tokens": event.content_tokens,
         "tokens": event.tokens.as_dict(),
     }

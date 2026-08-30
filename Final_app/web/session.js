@@ -60,14 +60,18 @@ function sessionProblemRow(problem) {
 
 function renderSessionProblems(problems) {
   const container = document.getElementById('session-problems');
+  container.replaceChildren(el('h3', 'section-h', 'Problems detected'));
+
+  // The panel stays even when clean, saying so explicitly — an empty slot
+  // here used to read as "did this even run", not "nothing was found".
   if (!problems.length) {
-    container.replaceChildren();
+    container.appendChild(el('div', 'muted', 'No problems were detected in this session.'));
     return;
   }
 
   const list = el('div', 'list');
   problems.forEach((problem) => list.appendChild(sessionProblemRow(problem)));
-  container.replaceChildren(el('h3', 'section-h', 'Problems detected'), list);
+  container.appendChild(list);
 }
 
 // A block opens in its own tab, so the bar stays where it is and several
@@ -87,63 +91,10 @@ function countByKind(blocks) {
   return counts;
 }
 
-function showTip(block, metric) {
-  const tip = document.getElementById('tip');
-  if (!block) {
-    tip.className = 'tip tip-empty';
-    tip.textContent = 'Hover a block';
-    return;
-  }
-
-  tip.className = 'tip';
-  tip.replaceChildren();
-  tip.appendChild(el('div', 'tip-kind', block.label));
-
-  const facts = el('div', 'tip-facts');
-  facts.appendChild(el('span', null, `${block.message_count} steps`));
-
-  if (metric === 'context') {
-    // The bar is sized by `block.context_tokens` in this mode — the real,
-    // bounded context window (DESIGN.md §7) — which is a different, smaller
-    // number from the cumulative `tokenFacts` shows below, and must not be
-    // summed against it: showing the cumulative figure here while the bar is
-    // visibly sized by the bounded one is exactly the "tokens don't add up
-    // to the header" confusion this branch exists to avoid.
-    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
-    const contextSpan = el('span', null, `${formatNumber(contextTokens)} tokens`);
-    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
-      + ` bounded context window this block currently holds — not summed`
-      + ' across every later call that re-read it (switch to the "tokens"'
-      + ' axis for that cumulative figure).';
-    facts.appendChild(contextSpan);
-  } else {
-    // The block's CUMULATIVE billed tokens across the whole session — what
-    // the "tokens" axis sizes by, unbounded — then how much of it is
-    // re-reads, which is what explains a tall block that barely did
-    // anything. Never sums to the "Context window" header stat; that is
-    // the separate, bounded `context` axis above.
-    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
-  }
-  facts.appendChild(costFact(block));
-
-  facts.appendChild(el('span', null, formatDuration(block.duration_s)));
-  if (block.confidence !== null && block.confidence !== undefined) {
-    facts.appendChild(el('span', null, `judge ${Math.round(block.confidence * 100)}%`));
-  }
-  tip.appendChild(facts);
-
-  if (block.description) {
-    tip.appendChild(el('div', 'tip-desc', `task: ${block.description}`));
-  }
-  if (block.inner_blocks && block.inner_blocks.length) {
-    tip.appendChild(el('div', 'tip-desc',
-      block.inner_blocks.map((b) => b.label).join(' · ')));
-  }
-}
-
 function drawBar(session) {
   const blocks = session.blocks || [];
   const select = document.getElementById('f-metric');
+  const tip = document.getElementById('tip');
 
   document.getElementById('block-count').textContent =
     `${blocks.length} blocks from ${session.message_count} events`;
@@ -157,8 +108,11 @@ function drawBar(session) {
       metric: select.value,
       // Reads `select.value` at hover time, not draw time, so the tooltip
       // still matches whichever axis is selected right now even if the user
-      // switches it while a block happens to be focused.
-      onHover: (block) => showTip(block, select.value),
+      // switches it while a block happens to be focused. `event.currentTarget`
+      // is the hovered SVG block itself, which `showBlockTip` anchors the
+      // floating tip to (see common.js).
+      onHover: (block, event) =>
+        showBlockTip(tip, block, select.value, event && event.currentTarget),
       onOpen: openBlock,
     });
     renderMetricTotal(document.getElementById('metric-total'), session, select.value);
@@ -167,6 +121,7 @@ function drawBar(session) {
   select.addEventListener('change', draw);
   draw();
   renderLegend(document.getElementById('legend'), countByKind(blocks));
+  dismissTipOnScroll(document.querySelector('.bar-col'), tip);
 }
 
 load();

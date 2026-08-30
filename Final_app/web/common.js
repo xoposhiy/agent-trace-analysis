@@ -213,28 +213,128 @@ function metricTotalText(subject, metric) {
   const contextTokens = subject.context_window_tokens ?? subject.context_tokens ?? 0;
 
   if (metric === 'context') {
-    return `${contextTokens.toLocaleString()} tokens — the real, bounded size`
-      + ` of this thread's last API call, not summed across every call.`;
+    return `${contextTokens.toLocaleString()} tokens — the real size of the`
+      + ` context window (this session's last API call token count).`;
   }
   if (metric === 'cost') {
-    // The cumulative token count belongs beside the dollar figure, not the
-    // "context" one above — both are the same "every call, re-billing
-    // included" shape, unlike the bounded, one-call context-window figure.
+    // Cumulative across the whole session, unlike the bounded "context"
+    // figure above — every token any call ever sent, re-reads included.
     const totalTokens = (subject.tokens && subject.tokens.total) || 0;
-    return `${formatCost(subject.attributed_cost)} (${totalTokens.toLocaleString()} tokens)`
-      + ` — every token sent, including re-reads re-billed on every later API`
-      + ` call, priced at each call's real rate.`;
+    return `${totalTokens.toLocaleString()} tokens — all tokens billed by`
+      + ` Anthropic across every API call this session sent to Anthropic.`;
   }
   if (metric === 'time') {
-    return `${formatDuration(subject.duration_s)} — how long this thread ran,`
+    return `${formatDuration(subject.duration_s)} — how long this session ran,`
       + ` start to last message.`;
   }
   if (metric === 'messages') {
-    return `${formatNumber(subject.message_count)} messages make up this thread.`;
+    return `${formatNumber(subject.message_count)} messages make up this session.`;
   }
   return '';
 }
 
 function renderMetricTotal(container, subject, metric) {
   container.textContent = metricTotalText(subject, metric);
+}
+
+// --- block hover tip ------------------------------------------------------
+//
+// Shared by session.js, agent.js and problem.js — all three hover the same
+// bar (`bar.js`) and used to each carry an identical copy of this. The tip is
+// a floating tooltip anchored to the hovered block, not a fixed panel sitting
+// elsewhere on the page: a fixed panel showed stale content after the bar's
+// own scrolling column (`.bar-col`, sticky + `overflow-y: auto`) was scrolled
+// with the mouse held still — a browser only re-fires `mouseenter`/
+// `mouseleave` on real pointer movement, never on scroll, so whatever block
+// was under the cursor before the scroll stayed described after the content
+// moved out from under it. Anchoring to the hovered element's own position
+// and dismissing on scroll (`dismissTipOnScroll`) removes the desync instead
+// of chasing it with more listeners.
+
+function fillBlockTip(tip, block, metric) {
+  tip.replaceChildren();
+  tip.appendChild(el('div', 'tip-kind', block.label));
+
+  const facts = el('div', 'tip-facts');
+  facts.appendChild(el('span', null, `${block.message_count} steps`));
+
+  if (metric === 'context') {
+    // The bar is sized by `block.context_tokens` in this mode — the real,
+    // bounded context window (DESIGN.md §7) — a different, smaller number
+    // from the cumulative `tokenFacts` figure shown otherwise, and the two
+    // must never be summed together.
+    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
+    const contextSpan = el('span', null, `+${formatNumber(contextTokens)} tokens`);
+    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
+      + ` bounded context window this block currently holds — not summed`
+      + ' across every later call that re-read it (switch to the "tokens"'
+      + ' axis for that cumulative figure).';
+    facts.appendChild(contextSpan);
+  } else {
+    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
+  }
+  facts.appendChild(costFact(block));
+  facts.appendChild(el('span', null, formatDuration(block.duration_s)));
+  if (block.confidence !== null && block.confidence !== undefined) {
+    facts.appendChild(el('span', null, `judge ${Math.round(block.confidence * 100)}%`));
+  }
+  tip.appendChild(facts);
+
+  // When this happened — already on the payload (`Block.t_start`) but never
+  // shown on hover before; the block detail page was the only place to find
+  // it, a click away.
+  if (block.t_start) {
+    tip.appendChild(el('div', 'tip-desc', absoluteTime(block.t_start)));
+  }
+
+  if (block.description) {
+    tip.appendChild(el('div', 'tip-desc', `task: ${block.description}`));
+  }
+  if (block.inner_blocks && block.inner_blocks.length) {
+    tip.appendChild(el('div', 'tip-desc',
+      block.inner_blocks.map((b) => b.label).join(' · ')));
+  }
+}
+
+// Placed beside whatever element the hover/focus landed on (an SVG block —
+// `getBoundingClientRect` works on those same as any other element), clamped
+// so it never runs off the right or bottom edge of the viewport. Measured
+// after the content above is already in the DOM, so `offsetWidth`/
+// `offsetHeight` reflect this call's tip rather than the previous one's.
+function positionTip(tip, anchor) {
+  if (!anchor) return;
+  const rect = anchor.getBoundingClientRect();
+  const margin = 10;
+
+  let left = rect.right + margin;
+  if (left + tip.offsetWidth > window.innerWidth - margin) {
+    left = Math.max(margin, rect.left - margin - tip.offsetWidth);
+  }
+  let top = Math.min(rect.top, window.innerHeight - tip.offsetHeight - margin);
+  top = Math.max(margin, top);
+
+  tip.style.left = `${left}px`;
+  tip.style.top = `${top}px`;
+}
+
+// `block` is `null` on `mouseleave`/`blur` — hidden rather than described as
+// nothing. `anchor` is the hovered element; omitted (or falsy) whenever
+// `block` is, since there is nothing to position against.
+function showBlockTip(tip, block, metric, anchor) {
+  if (!block) {
+    tip.hidden = true;
+    return;
+  }
+  fillBlockTip(tip, block, metric);
+  tip.hidden = false;
+  positionTip(tip, anchor);
+}
+
+// Scrolling `.bar-col` never fires `mouseleave` on the block the pointer is
+// no longer over (see the section comment above), so the tip has to be told
+// to hide explicitly rather than waiting for an event that will not come.
+function dismissTipOnScroll(scrollContainer, tip) {
+  if (!scrollContainer) return;
+  scrollContainer.addEventListener('scroll', () => { tip.hidden = true; },
+    { passive: true });
 }

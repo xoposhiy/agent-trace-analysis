@@ -17,6 +17,8 @@ from Final_app.ir.models import (
     Event,
     Problem,
     Session,
+    ToolCall,
+    ToolResult,
     Tokens,
 )
 
@@ -65,6 +67,36 @@ def test_tokens_serialise_both_figures():
 
     assert payload["total"] == 1130
     assert payload["working"] == 130
+
+
+# ----------------------------------------------------------------------
+# Event
+# ----------------------------------------------------------------------
+
+def test_file_path_reads_it_off_the_tool_call():
+    event = _event(0, tool=ToolCall(id="t1", name="Edit",
+                                    input={"file_path": "/repo/a.py"}))
+
+    assert event.file_path == "/repo/a.py"
+
+
+def test_file_path_falls_back_to_the_result_when_the_call_omits_it():
+    """Some tools (``NotebookEdit``) only report the path back on the result."""
+    event = _event(0, tool=ToolCall(id="t1", name="NotebookEdit", input={},
+                                    result=ToolResult(file_path="/repo/nb.ipynb")))
+
+    assert event.file_path == "/repo/nb.ipynb"
+
+
+def test_file_path_is_none_for_a_tool_that_touched_no_file():
+    event = _event(0, tool=ToolCall(id="t1", name="Bash",
+                                    input={"command": "pytest"}))
+
+    assert event.file_path is None
+
+
+def test_file_path_is_none_with_no_tool_at_all():
+    assert _event(0, event_type=EV_USER, text="hi").file_path is None
 
 
 # ----------------------------------------------------------------------

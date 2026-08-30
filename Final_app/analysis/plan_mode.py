@@ -84,10 +84,11 @@ from Final_app.ir.models import (
 SUMMARY_ALPHA = 0.10
 
 # A split is only suggested when it clears both floors — otherwise a tiny
-# session would get nagged over a saving nobody would act on. Carried over
-# from the prototype's defaults; tune once real sessions have been seen
-# through this panel.
-MIN_PCT_SAVING = 10.0
+# session would get nagged over a saving nobody would act on. Lowered from
+# the prototype's original 10.0 after a real session came back at 9.99% —
+# a real $2.93 saving excluded by 0.014 percentage points. 9% still filters
+# genuinely negligible cases while catching that one.
+MIN_PCT_SAVING = 9.0
 MIN_DOLLAR_SAVING = 0.50
 
 # Final_app's Block-granularity stand-ins for the prototype's raw-tool-call

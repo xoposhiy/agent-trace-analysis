@@ -25,44 +25,6 @@ function countByKind(blocks) {
   return counts;
 }
 
-// The same readout as the session page. Kept here rather than shared because
-// the two will diverge as the hover box grows; when they stop differing it
-// should move into common.js.
-function showTip(block, metric) {
-  const tip = document.getElementById('tip');
-  if (!block) {
-    tip.className = 'tip tip-empty';
-    tip.textContent = 'Hover a block';
-    return;
-  }
-
-  tip.className = 'tip';
-  tip.replaceChildren();
-  tip.appendChild(el('div', 'tip-kind', block.label));
-
-  const facts = el('div', 'tip-facts');
-  facts.appendChild(el('span', null, `${block.message_count} steps`));
-
-  if (metric === 'context') {
-    // See session.js's `showTip` for why this must not be the cumulative
-    // `tokenFacts` figure: that never sums to the bounded "Context window"
-    // header, and showing it here while the bar is sized by the bounded
-    // number is exactly the confusion this branch avoids.
-    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
-    const contextSpan = el('span', null, `${formatNumber(contextTokens)} tokens`);
-    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
-      + ` bounded context window this block currently holds — not summed`
-      + ' across every later call that re-read it (switch to the "tokens"'
-      + ' axis for that cumulative figure).';
-    facts.appendChild(contextSpan);
-  } else {
-    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
-  }
-  facts.appendChild(costFact(block));
-  facts.appendChild(el('span', null, formatDuration(block.duration_s)));
-  tip.appendChild(facts);
-}
-
 // --- load --------------------------------------------------------------
 
 async function load() {
@@ -116,6 +78,7 @@ async function load() {
 function drawBar(agent) {
   const blocks = agent.blocks || [];
   const select = document.getElementById('f-metric');
+  const tip = document.getElementById('tip');
 
   document.getElementById('block-count').textContent =
     `${blocks.length} blocks from ${agent.summary.steps} steps`;
@@ -131,7 +94,8 @@ function drawBar(agent) {
     renderBar(document.getElementById('bar'), blocks, {
       metric: select.value,
       // Reads `select.value` at hover time, not draw time — see session.js.
-      onHover: (block) => showTip(block, select.value),
+      onHover: (block, event) =>
+        showBlockTip(tip, block, select.value, event && event.currentTarget),
       onOpen: openBlock,
     });
     renderMetricTotal(document.getElementById('metric-total'), agent, select.value);
@@ -140,6 +104,7 @@ function drawBar(agent) {
   select.addEventListener('change', draw);
   draw();
   renderLegend(document.getElementById('legend'), countByKind(blocks));
+  dismissTipOnScroll(document.querySelector('.bar-col'), tip);
 }
 
 load();

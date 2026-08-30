@@ -395,6 +395,170 @@ def test_absorption_does_not_bridge_a_different_kind():
     assert kinds_of(blocks) == [READ, COORDINATION, WRITE, COORDINATION, READ]
 
 
+# ----------------------------------------------------------------------
+# Same-file "edit and verify" loops
+# ----------------------------------------------------------------------
+
+def test_a_read_of_a_just_written_file_becomes_part_of_the_write():
+    blocks = merge_neighbours([
+        (tool_event(0, "Write", {"file_path": "/a.py"}), WRITE, None),
+        (tool_event(1, "Read", {"file_path": "/a.py"}), READ, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 2
+
+
+def test_a_write_read_write_read_loop_on_one_file_is_a_single_write_block():
+    """The reported pattern: edit, check it landed, edit again, check again."""
+    blocks = merge_neighbours([
+        (tool_event(0, "Edit", {"file_path": "/a.py"}), WRITE, None),
+        (tool_event(1, "Read", {"file_path": "/a.py"}), READ, None),
+        (tool_event(2, "Edit", {"file_path": "/a.py"}), WRITE, None),
+        (tool_event(3, "Read", {"file_path": "/a.py"}), READ, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 4
+
+
+def test_coordination_inside_a_verification_loop_is_absorbed_too():
+    blocks = merge_neighbours([
+        (tool_event(0, "Write", {"file_path": "/a.py"}), WRITE, None),
+        (tool_event(1, "TodoWrite", {}), COORDINATION, None),
+        (tool_event(2, "Read", {"file_path": "/a.py"}), READ, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 3
+
+
+def test_a_read_before_any_write_is_exploration_not_verification():
+    """Only a write starts the loop — reading a fresh file first is unrelated,
+    and must stay a read rather than being folded into the edit after it."""
+    blocks = merge_neighbours([
+        (tool_event(0, "Read", {"file_path": "/a.py"}), READ, None),
+        (tool_event(1, "Edit", {"file_path": "/a.py"}), WRITE, None),
+    ])
+
+    assert kinds_of(blocks) == [READ, WRITE]
+
+
+def test_a_read_of_a_different_file_does_not_join_the_loop():
+    blocks = merge_neighbours([
+        (tool_event(0, "Write", {"file_path": "/a.py"}), WRITE, None),
+        (tool_event(1, "Read", {"file_path": "/b.py"}), READ, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE, READ]
+
+
+def test_the_loop_ends_at_the_next_different_kind():
+    blocks = merge_neighbours([
+        (tool_event(0, "Write", {"file_path": "/a.py"}), WRITE, None),
+        (tool_event(1, "Read", {"file_path": "/a.py"}), READ, None),
+        (tool_event(2, "Bash", {"command": "pytest"}), EXECUTE, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE, EXECUTE]
+    assert blocks[0].message_count == 2
+
+
+def test_an_edit_verify_loop_survives_the_whole_pipeline():
+    """End to end via ``build_blocks``, not just ``merge_neighbours`` directly."""
+    session = _session([
+        tool_event(0, "Edit", {"file_path": "/a.py"}),
+        tool_event(1, "Read", {"file_path": "/a.py"}),
+        tool_event(2, "Edit", {"file_path": "/a.py"}),
+        tool_event(3, "Read", {"file_path": "/a.py"}),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 4
+    assert "a.py" in blocks[0].label
+
+
+# ----------------------------------------------------------------------
+# Test-development loops: write, run the matching test, write, run again
+# ----------------------------------------------------------------------
+
+def test_a_write_execute_write_execute_test_loop_is_a_single_write_block():
+    """The same shape as the read loop, with a shell command standing in for
+    the verifying read — matched by the command naming the file's stem."""
+    blocks = merge_neighbours([
+        (tool_event(0, "Edit", {"file_path": "/blocks.py"}), WRITE, None),
+        (tool_event(1, "Bash", {"command": "pytest tests/test_blocks.py"}), EXECUTE, None),
+        (tool_event(2, "Edit", {"file_path": "/blocks.py"}), WRITE, None),
+        (tool_event(3, "Bash", {"command": "pytest tests/test_blocks.py"}), EXECUTE, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 4
+
+
+def test_an_unrelated_shell_command_does_not_join_the_test_loop():
+    """A command that never names the file is a real transition, not a check
+    on it — ``ls`` after an edit ends the loop rather than joining it."""
+    blocks = merge_neighbours([
+        (tool_event(0, "Edit", {"file_path": "/blocks.py"}), WRITE, None),
+        (tool_event(1, "Bash", {"command": "ls -la"}), EXECUTE, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE, EXECUTE]
+
+
+def test_naming_the_file_is_not_enough_without_a_test_marker():
+    """Real transcripts turned up a command that named the edited file's
+    module path purely by coincidence while doing something else entirely
+    (restarting a server) — naming the file alone must not be sufficient."""
+    blocks = merge_neighbours([
+        (tool_event(0, "Edit", {"file_path": "/app.js"}), WRITE, None),
+        (tool_event(1, "Bash", {"command": "nohup uvicorn app:app &"}), EXECUTE, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE, EXECUTE]
+
+
+def test_a_short_filename_still_joins_when_the_command_actually_checks_it():
+    """The fix above must not cost real short names their match — ``app.js``
+    is a common, legitimate entry-point filename, not just noise."""
+    blocks = merge_neighbours([
+        (tool_event(0, "Edit", {"file_path": "/app.js"}), WRITE, None),
+        (tool_event(1, "Bash", {"command": "node --check app.js && echo OK"}), EXECUTE, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE]
+
+
+def test_coordination_inside_a_test_loop_is_absorbed_too():
+    blocks = merge_neighbours([
+        (tool_event(0, "Edit", {"file_path": "/blocks.py"}), WRITE, None),
+        (tool_event(1, "TodoWrite", {}), COORDINATION, None),
+        (tool_event(2, "Bash", {"command": "pytest test_blocks.py"}), EXECUTE, None),
+    ])
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 3
+
+
+def test_a_test_loop_survives_the_whole_pipeline_and_is_labelled():
+    """End to end via ``build_blocks``: the heuristic (no judge) reads
+    ``pytest ...`` as execute, and the merged block's label says why the
+    write/execute alternation collapsed."""
+    session = _session([
+        tool_event(0, "Edit", {"file_path": "/blocks.py"}),
+        tool_event(1, "Bash", {"command": "pytest tests/test_blocks.py"}),
+        tool_event(2, "Edit", {"file_path": "/blocks.py"}),
+        tool_event(3, "Bash", {"command": "pytest tests/test_blocks.py"}),
+    ])
+    blocks = build_blocks(session, use_judge=False)
+
+    assert kinds_of(blocks) == [WRITE]
+    assert blocks[0].message_count == 4
+    assert "test development loop" in blocks[0].label
+
+
 def test_merging_an_empty_timeline_yields_no_blocks():
     assert merge_neighbours([]) == []
 

@@ -110,10 +110,34 @@ function renderStep(step) {
   card.appendChild(head);
 
   const facts = el('div', 'step-facts');
+
+  // What this one step added to its thread's real, bounded context window —
+  // a different, much smaller question than the two cumulative figures below
+  // it (DESIGN.md §7).
+  const contextTokens = typeof step.context_tokens === 'number' ? step.context_tokens : 0;
+  const contextDelta = el('span', null,
+    `+${formatNumber(contextTokens)} tokens to context window`);
+  contextDelta.title = `${contextTokens.toLocaleString()} tokens this step added to`
+    + ` its thread's context window`;
+  facts.appendChild(contextDelta);
+
+  // The step's cumulative billed total across the whole session, and how much
+  // of that is later calls re-reading it — the two halves `tokenBreakdown`
+  // explains in the tooltip.
   const split = tokenSplit(step);
-  const stepTokens = el('span', null, `${formatNumber(split.total)} tokens`);
-  stepTokens.title = tokenBreakdown(split);
-  facts.appendChild(stepTokens);
+  const billed = el('span', null, `${formatNumber(split.total)} billed`);
+  billed.title = tokenBreakdown(split);
+  facts.appendChild(billed);
+
+  if (split.cacheRead) {
+    const percent = Math.round(100 * split.cacheRead / Math.max(1, split.total));
+    const reread = el('span', null,
+      `${formatNumber(split.cacheRead)} re-read (${percent}%)`);
+    reread.title = `${split.cacheRead.toLocaleString()} tokens later calls paid to`
+      + ` re-read this step's content while it stayed in the context window`;
+    facts.appendChild(reread);
+  }
+
   // The API call this step was billed under. Steps of one block routinely
   // share it — that is the unit `usage` is reported for, not the step.
   if (step.message_id) {
@@ -250,20 +274,30 @@ async function load() {
       `judge ${Math.round(block.confidence * 100)}%`));
   }
 
-  // The headline figure is the whole context-window cost, matching how the bar
-  // sized this block. Cache reads get their own tile rather than only a tooltip:
-  // on this page there is room, and for an early block they are usually the
-  // larger half — which is the thing the bar's height is actually telling you.
+  // Three separate token questions, kept as three separate tiles rather than
+  // folded into one another (DESIGN.md §7): the real, bounded context window
+  // this block currently holds; everything ever billed to it, cumulative
+  // across the whole session; and how much of that billed total is later
+  // calls re-reading it rather than new work.
+  const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
+  const contextStat = stat('Context window', formatNumber(contextTokens),
+    `${contextTokens.toLocaleString()} tokens — this block's share of its`
+    + ` thread's real, bounded context window right now, not summed across`
+    + ` every later call that re-read it`);
+
   const split = tokenSplit(block);
-  const tokens = stat('Context window', formatNumber(split.total),
+  const billedStat = stat('All billed', formatNumber(split.total),
     tokenBreakdown(split) + ' — attributed to this block');
-  const cacheReads = stat('Cache reads', formatNumber(split.cacheRead),
-    `what later calls paid to re-read this block's content while it stayed in`
-    + ` the context window · ${split.cacheRead.toLocaleString()} tokens`);
+
+  const percent = Math.round(100 * split.cacheRead / Math.max(1, split.total));
+  const rereadStat = stat('Re-reads', `${formatNumber(split.cacheRead)} (${percent}%)`,
+    `${split.cacheRead.toLocaleString()} tokens later calls paid to re-read this`
+    + ` block's content while it stayed in the context window`);
 
   document.getElementById('stats').replaceChildren(
-    tokens,
-    cacheReads,
+    contextStat,
+    billedStat,
+    rereadStat,
     stat('Steps', String(block.summary.steps)),
     stat('Tool calls', String(block.summary.tool_calls)),
     stat('Failed', String(block.summary.failed)),

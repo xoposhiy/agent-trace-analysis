@@ -43,12 +43,18 @@ from Final_app.ir.models import Event
 # ----------------------------------------------------------------------
 # Budget
 # ----------------------------------------------------------------------
-# One tooltip line. The subject is the part that can run away — a single
-# absolute path in this repo is already 78 characters — so it is capped on its
-# own rather than trusting a trim of the whole label to fall in a sane place.
+# This used to cap a fixed-width, one-line tooltip panel, which is why it was
+# 44/80. That panel is gone — the hover tip is now a floating box next to the
+# block that wraps onto as many lines as it needs (`web/common.js`'s
+# `fillBlockTip`, `style.css`'s `.tip`) — so the budget only needs to stop a
+# genuinely pathological label (a whole file path list, a multi-paragraph
+# ``description``) from making the tip unreasonably tall, not a normal
+# sentence or file name. The subject is still capped on its own, ahead of the
+# whole label, so a long subject cannot eat the step/failure count that always
+# follows it.
 
-MAX_SUBJECT = 44
-MAX_LABEL = 80
+MAX_SUBJECT = 300
+MAX_LABEL = 400
 
 # Naming three files is a list; naming five is a paragraph. Past this the
 # label switches to counting instead.
@@ -84,26 +90,16 @@ def _touched_files(events: list[Event]) -> collections.Counter:
     """
     counts: collections.Counter = collections.Counter()
     for event in events:
-        if event.tool is None:
-            continue
-        path = event.tool.input.get("file_path")
-        if not path and event.tool.result is not None:
-            path = event.tool.result.file_path
-        if path:
-            counts[os.path.basename(str(path))] += 1
+        if event.file_path:
+            counts[os.path.basename(event.file_path)] += 1
     return counts
 
 
 def _directories(events: list[Event]) -> set[str]:
     directories = set()
     for event in events:
-        if event.tool is None:
-            continue
-        path = event.tool.input.get("file_path")
-        if not path and event.tool.result is not None:
-            path = event.tool.result.file_path
-        if path:
-            directories.add(os.path.basename(os.path.dirname(str(path))))
+        if event.file_path:
+            directories.add(os.path.basename(os.path.dirname(event.file_path)))
     return directories
 
 
@@ -187,12 +183,16 @@ def _failed(events: list[Event]) -> int:
                and event.tool.result.is_error)
 
 
-def compose_label(base: str, events: list[Event]) -> str:
-    """``kind · subject · N steps · M failed``, trimmed to one line.
+def compose_label(base: str, events: list[Event], note: Optional[str] = None) -> str:
+    """``kind · [note ·] subject · N steps · M failed``, trimmed to one line.
 
     The step count stays even when a subject is present: ``write · bar.js``
     reads as one edit when it was four, which is a worse label than the count
     alone was.
+
+    ``note`` names a pattern the caller has already recognised in this
+    specific run of events (a test-development loop, say) that the subject
+    below cannot say on its own — it is not something this function derives.
     """
     if not events:
         return base
@@ -203,6 +203,8 @@ def compose_label(base: str, events: list[Event]) -> str:
         return _clip(single, MAX_LABEL)
 
     parts = [base]
+    if note:
+        parts.append(note)
     subject = block_subject(events)
     if subject:
         parts.append(subject)

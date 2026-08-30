@@ -202,19 +202,33 @@ def test_no_label_outruns_one_tooltip_line(events):
     assert len(label) <= MAX_LABEL, f"{len(label)} chars: {label}"
 
 
+def test_a_realistic_chat_message_survives_whole():
+    """A regression test for the old 80-char tooltip budget: a normal,
+    sentence-length chat message used to be cut around 80 characters even
+    though the hover tip is now a floating box with room to wrap it in full."""
+    message = ("Can we change the model to gemini luna in the .env file and"
+               " make sure the API key still works after that?")
+    events = [prose(message, 1)]
+
+    assert compose_label("user_chat", events) == f"user_chat · {message}"
+
+
 def test_a_clipped_subject_says_it_was_clipped():
-    events = [tool("Bash", {"command": "x", "description": "w " * 80}, 1),
+    # MAX_SUBJECT is generous now (the hover tip wraps instead of eliding),
+    # so this has to actually outrun it to exercise the clip.
+    events = [tool("Bash", {"command": "x", "description": "w " * 200}, 1),
               tool("Bash", {"command": "y"}, 2)]
 
     assert "…" in compose_label("execute", events)
 
 
 def test_a_clipped_label_does_not_end_mid_word():
-    events = [tool("Bash", {"command": "x",
-                            "description": "reticulating splines carefully "
-                                           "and then some more words"}, 1),
+    # Long enough to actually outrun MAX_SUBJECT and exercise the clip.
+    description = "reticulating splines carefully " + "and then some more words " * 15
+    events = [tool("Bash", {"command": "x", "description": description}, 1),
               tool("Bash", {"command": "y"}, 2)]
 
     subject = block_subject(events)
+    assert "…" in subject
     assert not subject.rstrip("…").endswith(" ")
     assert "reticulating" in subject

@@ -234,6 +234,23 @@ class Event:
     def is_subagent(self) -> bool:
         return self.agent_id is not None
 
+    @property
+    def file_path(self) -> Optional[str]:
+        """The file this event's tool call touched, or ``None``.
+
+        Most tools report it on the call itself (``Edit``'s ``file_path``
+        input); some only report it back on the result (``NotebookEdit``, and
+        anything whose call omits the path but whose result records it).
+        ``None`` for an event with no tool, or a tool that touched no file
+        (``Bash``, ``Grep``'s pattern-only search, ...).
+        """
+        if self.tool is None:
+            return None
+        path = self.tool.input.get("file_path")
+        if not path and self.tool.result is not None:
+            path = self.tool.result.file_path
+        return str(path) if path else None
+
     def as_dict(self) -> dict:
         return {
             "uuid": self.uuid,

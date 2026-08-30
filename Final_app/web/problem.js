@@ -16,41 +16,6 @@ function openBlock(_block, index) {
     '_blank', 'noopener');
 }
 
-// Mirrors session.js's own `showTip` — see it for why the branch exists:
-// the cumulative `tokenFacts` figure never sums to the bounded "Context
-// window" stat, so showing it while the bar is sized by the bounded
-// `context` metric is exactly the confusion this avoids.
-function showTip(block, metric) {
-  const tip = document.getElementById('tip');
-  if (!block) {
-    tip.className = 'tip tip-empty';
-    tip.textContent = 'Hover a block';
-    return;
-  }
-
-  tip.className = 'tip';
-  tip.replaceChildren();
-  tip.appendChild(el('div', 'tip-kind', block.label));
-
-  const facts = el('div', 'tip-facts');
-  facts.appendChild(el('span', null, `${block.message_count} steps`));
-
-  if (metric === 'context') {
-    const contextTokens = typeof block.context_tokens === 'number' ? block.context_tokens : 0;
-    const contextSpan = el('span', null, `${formatNumber(contextTokens)} tokens`);
-    contextSpan.title = `${contextTokens.toLocaleString()} tokens of the real,`
-      + ` bounded context window this block currently holds — not summed`
-      + ' across every later call that re-read it (switch to the "tokens"'
-      + ' axis for that cumulative figure).';
-    facts.appendChild(contextSpan);
-  } else {
-    tokenFacts(tokenSplit(block)).forEach((span) => facts.appendChild(span));
-  }
-  facts.appendChild(costFact(block));
-  facts.appendChild(el('span', null, formatDuration(block.duration_s)));
-  tip.appendChild(facts);
-}
-
 function countByKind(blocks) {
   const counts = {};
   blocks.forEach((block) => {
@@ -161,10 +126,14 @@ async function load() {
 
   const blocks = session.blocks || [];
   const select = document.getElementById('f-metric');
+  const tip = document.getElementById('tip');
   const draw = () => {
     const metric = select.value;
     renderBar(document.getElementById('bar'), blocks, {
-      metric, onHover: (block) => showTip(block, metric), onOpen: openBlock,
+      metric,
+      onHover: (block, event) =>
+        showBlockTip(tip, block, metric, event && event.currentTarget),
+      onOpen: openBlock,
     });
     renderSecondBar(problem, blocks, data, metric);
     renderMetricTotal(document.getElementById('metric-total'), session, metric);
@@ -172,6 +141,7 @@ async function load() {
   select.addEventListener('change', draw);
   draw();
   renderLegend(document.getElementById('legend'), countByKind(blocks));
+  dismissTipOnScroll(document.querySelector('.bar-col'), tip);
 }
 
 // Which second visualization applies depends on the problem type — a cut
@@ -193,8 +163,10 @@ function renderSecondBar(problem, blocks, data, metric) {
       return;
     }
     arrow.hidden = false;
+    const tip = document.getElementById('tip');
     renderPlanModeBar(planModeBar, blocks, splitIndex, metric,
-      (block) => showTip(block, metric), openBlock);
+      (block, event) => showBlockTip(tip, block, metric, event && event.currentTarget),
+      openBlock);
     return;
   }
 
